@@ -25,6 +25,12 @@ const schema = z.object({
   /** Public origin of the onboarding/settings pages (served by the API process under /onboard, /me). */
   APP_ORIGIN: optionalString(),
   NUDGE_INTERVAL_HOURS: int(6),
+  /**
+   * Dev only: a web chat simulator at /dev/chat plus a fake BlueBubbles server at /dev/bluebubbles,
+   * so the whole front door runs without a Mac (point BLUEBUBBLES_URL at <API>/dev/bluebubbles).
+   * Refused in production.
+   */
+  DEV_SIMULATOR: flag(),
 });
 
 export const configSectionP2: ConfigSection<typeof schema> = {
@@ -39,6 +45,9 @@ export const configSectionP2: ConfigSection<typeof schema> = {
     ...missingIf(cfg.USE_REAL_IDENTITY, cfg, ["APP_ORIGIN", "BLUEBUBBLES_BOT_ADDRESS"]),
     // Sign-up codes are texted to the bot and matched on the real inbound webhook.
     ...(cfg.USE_REAL_IDENTITY && !cfg.USE_REAL_MESSAGING ? ["USE_REAL_MESSAGING=true (sign-up codes)"] : []),
+    ...(cfg.DEV_SIMULATOR && all.NODE_ENV === "production"
+      ? ["DEV_SIMULATOR=false (not allowed in production)"]
+      : []),
     ...missingIf(cfg.USE_REAL_IDENTITY, all, ["DATABASE_URL"]),
     ...(cfg.USE_REAL_IDENTITY && all.RUNTIME_STORE !== "postgres" ? ["RUNTIME_STORE=postgres"] : []),
   ],

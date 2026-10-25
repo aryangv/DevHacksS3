@@ -15,6 +15,39 @@ Security: sessions only after a server-confirmed verification; cookies `HttpOnly
 (`Secure` on https); state-changing calls are JSON POSTs that must carry our `Origin`; strict CSP with a
 per-response script nonce; `no-referrer` (nudge links carry a token). No API key ever reaches the browser.
 
+## Running everything without a Mac (dev simulator)
+
+`/dev/chat` is a web page that acts like iMessage: pretend people, their 1:1 chats with the bot, and
+group chats. A message typed there is posted (BlueBubbles-shaped) to the real `/webhooks/bluebubbles`
+route; the bot's replies go out through the real BlueBubbles adapter to a fake BlueBubbles Server at
+`/dev/bluebubbles`. Identity, sign-up, memory, the AI and tools are all real. Dev only: refused when
+`NODE_ENV=production`, and the page only answers to requests made directly on `localhost`.
+
+Add to `.env` (on top of your model / Supermemory keys), then `pnpm db:migrate` and `pnpm dev:api`:
+
+```
+RUNTIME_STORE=postgres
+DATABASE_URL=pglite://./.data/pglite
+RUN_WORKER_IN_PROCESS=true
+USE_REAL_MESSAGING=true
+USE_REAL_IDENTITY=true
+USE_REAL_MEMORY=true
+DEV_SIMULATOR=true
+BLUEBUBBLES_URL=http://localhost:3000/dev/bluebubbles
+BLUEBUBBLES_PASSWORD=sim-pw
+BLUEBUBBLES_WEBHOOK_SECRET=any-long-random-string
+BLUEBUBBLES_BOT_ADDRESS=+15555550100
+APP_ORIGIN=http://localhost:3000
+```
+
+Open http://localhost:3000/dev/chat, pick a person, text the bot, follow the sign-up link it sends
+(same browser), and send the code back as that person. "Run it now" runs the group-memory job
+instead of waiting a minute.
+
+Gemini's free tier allows only a handful of requests per minute (and ~20/day on some models): pick a
+model with headroom via `MODEL_NAME` (e.g. `gemini-3.5-flash`). A temporary provider error is retried
+once; after that the bot apologizes rather than guessing.
+
 ## Running v1 on real iMessage
 
 The transport is **BlueBubbles**: a BlueBubbles Server on a Mac signed into the bot's Apple ID relays

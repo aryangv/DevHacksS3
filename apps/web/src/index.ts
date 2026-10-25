@@ -16,6 +16,7 @@ import { type HarnessError, type MemoryProfile, personalAgentId } from "@campus/
 import { type IdentityServices, type WebSession, createIdentityServices } from "@campus/identity";
 import type { Container } from "@campus/worker";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { registerDevSimulator } from "./dev-simulator";
 import { type Html, csp, esc, html, newNonce, page, raw } from "./html";
 
 const SESSION_COOKIE = "cv_session";
@@ -76,6 +77,7 @@ const memoryDeletion = (c: Container): MemoryDeletion | null => {
 };
 
 export async function registerWebRoutes(app: FastifyInstance, c: Container): Promise<void> {
+  await registerDevSimulator(app, c);
   const origin = c.config.APP_ORIGIN ? new URL(c.config.APP_ORIGIN).origin : null;
   const secure = origin?.startsWith("https://") ?? false;
 
