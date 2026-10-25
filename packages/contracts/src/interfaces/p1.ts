@@ -86,6 +86,11 @@ export interface TaskStore {
   create<S extends Record<string, unknown>>(task: NewTask<S>): Promise<AgentTask<S>>;
   get<S extends Record<string, unknown>>(taskId: string): Promise<AgentTask<S> | null>;
   /** Most recent non-terminal task of `type` in a conversation. */
+  /** Tasks of `type` currently in one of `statuses` (e.g. orders waiting on payment or delivery). */
+  listByStatus<S extends Record<string, unknown>>(
+    type: string,
+    statuses: string[],
+  ): Promise<Array<AgentTask<S>>>;
   findActive<S extends Record<string, unknown>>(
     conversationId: string,
     type: string,

@@ -244,7 +244,8 @@ export async function registerDevSimulator(app: FastifyInstance, c: Container): 
   }
 
   app.post("/dev/chat/ingest", { preHandler: guard }, async () => {
-    if (!c.maintenance) return { ran: false, reason: "real memory is off (USE_REAL_MEMORY=false)" };
+    if (!c.maintenance || c.wiring.memory !== "real")
+      return { ran: false, reason: "real memory is off (USE_REAL_MEMORY=false)" };
     await c.maintenance.runAll();
     return { ran: true };
   });

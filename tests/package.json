@@ -11,6 +11,7 @@
     "@campus/context": "workspace:*",
     "@campus/contracts": "workspace:*",
     "@campus/db": "workspace:*",
+    "@campus/grubhub": "workspace:*",
     "@campus/harness": "workspace:*",
     "@campus/identity": "workspace:*",
     "@campus/messaging": "workspace:*",

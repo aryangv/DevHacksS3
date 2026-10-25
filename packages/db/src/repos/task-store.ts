@@ -53,6 +53,17 @@ export class PgTaskStore implements TaskStore {
     return r.rows[0] ? toTask<S>(r.rows[0]) : null;
   }
 
+  async listByStatus<S extends Record<string, unknown>>(
+    type: string,
+    statuses: string[],
+  ): Promise<Array<AgentTask<S>>> {
+    const r = await this.sql.query<TaskRow>(
+      `SELECT * FROM core.agent_tasks WHERE type = $1 AND status = ANY($2::text[]) ORDER BY created_at LIMIT 200`,
+      [type, statuses],
+    );
+    return r.rows.map((row) => toTask<S>(row));
+  }
+
   async findActive<S extends Record<string, unknown>>(
     conversationId: string,
     type: string,

@@ -1,6 +1,6 @@
 import type { Logger, ModelClient } from "@campus/contracts";
 import { demoGroupProviderId, demoUsers } from "@campus/contracts/fixtures";
-import { Simulator } from "@campus/worker";
+import { type ContainerOverrides, Simulator } from "@campus/worker";
 
 export const TEST_ENV = { LOG_LEVEL: "error", APP_ORIGIN: "https://app.test", NODE_ENV: "test" };
 
@@ -14,11 +14,17 @@ export const GROUP = demoGroupProviderId;
 export const ALL_MEMBERS = demoUsers.map((u) => u.externalId);
 
 export async function makeSim(
-  opts: { model?: ModelClient; env?: Record<string, string>; logger?: Logger } = {},
+  opts: {
+    model?: ModelClient;
+    env?: Record<string, string>;
+    logger?: Logger;
+    overrides?: ContainerOverrides;
+  } = {},
 ): Promise<Simulator> {
+  const overrides = { ...opts.overrides, ...(opts.model ? { model: opts.model } : {}) };
   return Simulator.create({
     env: { ...TEST_ENV, ...opts.env },
-    ...(opts.model ? { overrides: { model: opts.model } } : {}),
+    ...(Object.keys(overrides).length ? { overrides } : {}),
     ...(opts.logger ? { logger: opts.logger } : {}),
   });
 }

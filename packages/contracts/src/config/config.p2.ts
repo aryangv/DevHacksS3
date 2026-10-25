@@ -31,6 +31,18 @@ const schema = z.object({
    * Refused in production.
    */
   DEV_SIMULATOR: flag(),
+  /**
+   * Interim dining connector (team decision; P4 may absorb it): "grubhub" backs the dining__* tools
+   * with real Grubhub restaurants/menus/orders via the unofficial grubhub-mcp server. "fake" = test data.
+   */
+  DINING_PROVIDER: z.enum(["fake", "grubhub"]).default("fake"),
+  /** Where food is delivered (search + menus are location-specific). */
+  DELIVERY_LATITUDE: z.coerce.number().min(-90).max(90).optional(),
+  DELIVERY_LONGITUDE: z.coerce.number().min(-180).max(180).optional(),
+  /** Grubhub login session (contains credentials; gitignored). */
+  GRUBHUB_SESSION_DIR: z.string().default("./.data/grubhub"),
+  /** Hard cap per real order, in cents. */
+  GRUBHUB_MAX_ORDER_MINOR: int(8000),
 });
 
 export const configSectionP2: ConfigSection<typeof schema> = {
@@ -48,6 +60,7 @@ export const configSectionP2: ConfigSection<typeof schema> = {
     ...(cfg.DEV_SIMULATOR && all.NODE_ENV === "production"
       ? ["DEV_SIMULATOR=false (not allowed in production)"]
       : []),
+    ...missingIf(cfg.DINING_PROVIDER === "grubhub", cfg, ["DELIVERY_LATITUDE", "DELIVERY_LONGITUDE"]),
     ...missingIf(cfg.USE_REAL_IDENTITY, all, ["DATABASE_URL"]),
     ...(cfg.USE_REAL_IDENTITY && all.RUNTIME_STORE !== "postgres" ? ["RUNTIME_STORE=postgres"] : []),
   ],

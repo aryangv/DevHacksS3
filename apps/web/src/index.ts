@@ -6,7 +6,7 @@
 //   /me/memory      what the assistant has learnt (Supermemory profile) and recent memory activity
 //   /me/connections connected tool accounts (ConnectionService, P4)
 //   /me/settings    memory settings + consent grants/requests (P3's ConsentService)
-//   /approve/:id    approval page shell (approval logic is P4's)
+//   /approve/:id    the payer approves the exact order total and places it (approval logic: P4's, fake for now)
 //
 // Security: sessions only after a server-confirmed verification; cookies HttpOnly + SameSite=Lax
 // (+ Secure on https); state-changing requests are JSON POSTs that must carry our Origin; strict CSP
@@ -131,7 +131,10 @@ export async function registerWebRoutes(app: FastifyInstance, c: Container): Pro
     }
     const s = await session(req);
     if (!s) {
-      await reply.redirect("/onboard?mode=login", 303);
+      // Come back to this page after signing in (relative paths only: no open redirect).
+      const next =
+        req.url.startsWith("/") && !req.url.startsWith("//") ? `&next=${encodeURIComponent(req.url)}` : "";
+      await reply.redirect(`/onboard?mode=login${next}`, 303);
       return null;
     }
     return s;
@@ -214,7 +217,11 @@ $("start").addEventListener("submit", async (e) => {
 async function poll() {
   const res = await fetch("/onboard/status", { headers: { accept: "application/json" } });
   const data = await res.json().catch(() => ({}));
-  if (data.status === "approved") { clearInterval(timer); location.href = data.next || "/me"; }
+  if (data.status === "approved") {
+    clearInterval(timer);
+    const back = new URLSearchParams(location.search).get("next");
+    location.href = back && back.startsWith("/") && !back.startsWith("//") && !back.startsWith("/\\") ? back : (data.next || "/me");
+  }
   else if (data.status === "expired" || data.status === "failed" || res.status === 404) {
     clearInterval(timer); $("wait").textContent = "That code expired. Reload the page to get a new one.";
     $("wait").className = "small status-bad";
@@ -665,19 +672,106 @@ document.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = async () =
     },
   );
 
-  // ---- approval page shell (spec 18.2: UI + session by P2, logic by P4) ------------------------------
+  // ---- approval page (spec 18.2: UI + session by P2; approval logic is P4's, fake until stage 2) ------
+  // The payer, signed in, sees exactly what will be ordered and the exact provider total, and places
+  // it with one tap. The gateway then runs exactly the approved submit_order (it refuses if the
+  // provider's total changed).
   app.get<{ Params: { id: string } }>("/approve/:id", async (req, reply) => {
     const s = await signedIn(req, reply);
     if (!s) return reply;
     const nonce = newNonce();
-    const body = html` <h1>Approve a payment</h1>
+    const id = /^[0-9a-f-]{36}$/i.test(req.params.id) ? req.params.id : "";
+    const task = id ? await c.orders.findByApproval(id) : null;
+    const order = task?.state.order;
+    if (!task || !order?.quote) {
+      const body = html`<h1>Approve a payment</h1>
+        <div class="card">
+          <p class="muted">
+            There's nothing waiting for your approval here. It may have expired or already been placed.
+            Nothing has been charged.
+          </p>
+        </div>`;
+      return send(reply, nonce, page({ title: "Approve", nonce, body, nav: true }));
+    }
+    if (order.payerUserId !== s.userId) {
+      const body = html`<h1>Approve a payment</h1>
+        <div class="card"><p>Only the person paying can approve this order.</p></div>`;
+      return send(reply, nonce, page({ title: "Approve", nonce, body, nav: true }), 403);
+    }
+    const money = (m: number | null) => (m === null ? "—" : `$${(m / 100).toFixed(2)}`);
+    const q = order.quote;
+    const body = html` <h1>Place the group order</h1>
       <div class="card">
-        <p>Reference <code>${req.params.id}</code></p>
-        <p class="muted">
-          Payment approval isn't connected yet (it's part of the payments work). Nothing has been charged.
+        <h2>
+          ${order.restaurant} <span class="pill">${q.provider === "grubhub" ? "Grubhub" : q.provider}</span>
+        </h2>
+        <table>
+          ${order.lines.map(
+            (l) =>
+              html`<tr>
+                <td>${l.name ?? "Someone"}</td>
+                <td>
+                  ${l.items.map((i) => `${i.quantity > 1 ? `${i.quantity}x ` : ""}${i.name}`).join(", ")}
+                </td>
+                <td>${money(l.subtotalMinor)}</td>
+              </tr>`,
+          )}
+          <tr>
+            <td colspan="2">Tax</td>
+            <td>${money(q.taxMinor)}</td>
+          </tr>
+          <tr>
+            <td colspan="2">Fees</td>
+            <td>${money(q.feesMinor)}</td>
+          </tr>
+          ${
+            q.tipMinor
+              ? html`<tr>
+                  <td colspan="2">Tip</td>
+                  <td>${money(q.tipMinor)}</td>
+                </tr>`
+              : raw("")
+          }
+          <tr>
+            <th colspan="2">Total charged</th>
+            <th>${money(q.totalMinor)}</th>
+          </tr>
+        </table>
+        <p class="small muted">
+          Paid with the card saved on the ordering account. The order is only placed if the restaurant's total
+          is still exactly ${money(q.totalMinor)}.
         </p>
+        ${order.splits.length ? html`<p class="small">Split after: ${order.splits.map((x) => `${x.name ?? "someone"} owes you ${money(x.owesMinor)}`).join(", ")}.</p>` : raw("")}
+        <button id="place">Place order · ${money(q.totalMinor)}</button>
+        <p class="small" id="result" role="status"></p>
       </div>`;
-    return send(reply, nonce, page({ title: "Approve", nonce, body, nav: true }));
+    const script = `
+const b = document.getElementById("place");
+b.onclick = async () => {
+  b.disabled = true; b.textContent = "Placing…";
+  const r = await fetch(location.pathname + "/place", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  const d = await r.json().catch(() => ({}));
+  document.getElementById("result").textContent = d.message || (r.ok ? "Done." : "Something went wrong.");
+  document.getElementById("result").className = "small " + (d.status === "placed" ? "status-ok" : "status-bad");
+  b.textContent = d.status === "placed" ? "Placed" : "Place order";
+  b.disabled = d.status === "placed";
+};`;
+    return send(reply, nonce, page({ title: "Place order", nonce, body, script, nav: true }));
+  });
+
+  app.post<{ Params: { id: string } }>("/approve/:id/place", async (req, reply) => {
+    if (!sameOrigin(req)) return reply.code(403).send({ error: "bad origin" });
+    const s = await session(req);
+    if (!s) return reply.code(401).send({ status: "forbidden", message: "Sign in first." });
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return reply.code(404).send({ status: "not_found" });
+    try {
+      const r = await c.orders.approveAndPlace(req.params.id, s.userId);
+      const code =
+        r.status === "placed" ? 200 : r.status === "not_found" ? 404 : r.status === "forbidden" ? 403 : 409;
+      return reply.code(code).send(r);
+    } catch (err) {
+      return jsonError(reply, err);
+    }
   });
 }
 

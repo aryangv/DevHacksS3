@@ -6,6 +6,7 @@ import type { Logger, MemoryMaintenance } from "@campus/contracts";
 // a failure is logged, never thrown into the worker.
 
 type Job = { name: string; everyMs: number; run: () => Promise<unknown> };
+export type MaintenanceJob = Job;
 
 export class MaintenanceScheduler {
   private readonly timers: NodeJS.Timeout[] = [];
@@ -19,7 +20,14 @@ export class MaintenanceScheduler {
 
   static forMemory(
     maintenance: MemoryMaintenance,
-    opts: { cleanupEveryMs: number; purgeEveryMs: number; groupIngestEveryMs?: number; logger: Logger },
+    opts: {
+      cleanupEveryMs: number;
+      purgeEveryMs: number;
+      groupIngestEveryMs?: number;
+      /** Other periodic jobs to run on the same scheduler (e.g. order tracking). */
+      extraJobs?: Job[];
+      logger: Logger;
+    },
   ): MaintenanceScheduler {
     const ingest = maintenance.ingestGroupChat?.bind(maintenance);
     return new MaintenanceScheduler(
@@ -33,6 +41,7 @@ export class MaintenanceScheduler {
         ...(ingest
           ? [{ name: "memory.group_chat_ingest", everyMs: opts.groupIngestEveryMs ?? 60_000, run: ingest }]
           : []),
+        ...(opts.extraJobs ?? []),
       ],
       opts.logger,
     );

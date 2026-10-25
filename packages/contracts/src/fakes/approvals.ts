@@ -82,6 +82,21 @@ export class FakeApprovalService implements ApprovalService {
     };
   }
 
+  /**
+   * The payer approved a spend on the authenticated web page (P2's page; P4's real ApprovalService
+   * replaces this). Only the payer, only while pending and unexpired.
+   */
+  approveFromWeb(approvalId: string, userId: string): boolean {
+    const p = this.approvals.find((a) => a.id === approvalId);
+    if (!p || p.userId !== userId || p.status !== "pending" || p.kind !== "spend_handoff") return false;
+    if (this.clock.now().getTime() > p.expiresAt) {
+      p.status = "expired";
+      return false;
+    }
+    p.status = "approved";
+    return true;
+  }
+
   isApproved(approvalId: string, userId: string): boolean {
     const p = this.approvals.find((a) => a.id === approvalId);
     return !!p && p.userId === userId && p.status === "approved";

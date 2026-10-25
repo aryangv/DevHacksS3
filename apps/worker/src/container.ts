@@ -2,7 +2,9 @@ import {
   DeterministicCoordinator,
   GroupAgentRegistry,
   InProcessCoordinationBus,
+  OrderService,
   PersonalAgentRegistry,
+  type WebApprovals,
 } from "@campus/agents";
 import {
   type AppConfig,
@@ -62,7 +64,9 @@ import {
   InMemoryTaskStore,
   heuristicResponder,
 } from "@campus/contracts/fakes";
+import { sampleToolManifests } from "@campus/contracts/fixtures";
 import { PgAuditLog, PgInboundQueue, PgMessageLog, PgTaskStore, createSqlClient } from "@campus/db";
+import { type GrubhubCaller, GrubhubProcess, createGrubhubDining } from "@campus/grubhub";
 import {
   AgentRuntimeImpl,
   AnthropicModelClient,
@@ -107,8 +111,10 @@ export type Container = {
   runtime: AgentRuntimeImpl;
   pipeline: TurnPipelineImpl;
   worker: QueueWorker;
-  /** Background jobs (memory cleanup/retention) when the real memory module provides them. Start with the worker. */
+  /** Background jobs (memory cleanup/retention/group chat, order tracking). Start with the worker. */
   maintenance: MaintenanceScheduler | null;
+  /** Real group orders: payer approval → place → delivery tracking (posts to the group). */
+  orders: OrderService;
   /** Which implementation each slot uses ("fake" | "real"), for logs and the simulator banner. */
   wiring: Record<string, "fake" | "real">;
   /** Present when the corresponding fakes are wired (simulator/test seeding). */
@@ -128,7 +134,11 @@ export type Container = {
 };
 
 export type ContainerOverrides = Partial<
-  Pick<Container, "messaging" | "model" | "audit" | "tasks" | "queue" | "messageLog"> & { sql: SqlClient }
+  Pick<Container, "messaging" | "model" | "audit" | "tasks" | "queue" | "messageLog"> & {
+    sql: SqlClient;
+    /** Tests: a fake Grubhub instead of starting the grubhub-mcp process (DINING_PROVIDER=grubhub). */
+    diningCaller: GrubhubCaller;
+  }
 >;
 
 async function loadReal<T>(key: keyof typeof REAL_MODULES, deps: unknown): Promise<T> {
@@ -231,17 +241,11 @@ export async function buildContainer(
     buckets: BucketProvisioner,
     memoryPolicy: MemoryPolicy;
   let maintenance: MaintenanceScheduler | null = null;
+  let memoryMaintenance: ContextModule["maintenance"] | undefined;
   if (config.USE_REAL_MEMORY) {
     const contextModule = await loadReal<ContextModule>("context", { ...moduleDeps, membership });
     ({ memoryStore, broker, consent, buckets, memoryPolicy } = contextModule);
-    if (contextModule.maintenance) {
-      maintenance = MaintenanceScheduler.forMemory(contextModule.maintenance, {
-        cleanupEveryMs: config.MEMORY_CLEANUP_INTERVAL_MS,
-        purgeEveryMs: config.MEMORY_PURGE_INTERVAL_MS,
-        groupIngestEveryMs: config.MEMORY_GROUP_INGEST_INTERVAL_MS,
-        logger,
-      });
-    }
+    memoryMaintenance = contextModule.maintenance;
     wiring.memory = "real";
   } else {
     memoryStore = fakes.memoryStore = new FakeMemoryStore();
@@ -267,7 +271,31 @@ export async function buildContainer(
     }));
     wiring.tools = "real";
   } else {
-    const provider = (fakes.toolProvider = new FakeToolProvider());
+    // Interim real dining connector (DINING_PROVIDER=grubhub): the dining__* tools come from Grubhub;
+    // everything still goes through the gateway (submit_order is spend: approval + cap).
+    let provider: FakeToolProvider;
+    if (config.DINING_PROVIDER === "grubhub") {
+      let call = o.diningCaller;
+      if (!call) {
+        const gh = new GrubhubProcess({ sessionDir: config.GRUBHUB_SESSION_DIR, logger });
+        closers.push(() => gh.close());
+        call = gh.call;
+      }
+      const dining = createGrubhubDining({
+        call,
+        latitude: config.DELIVERY_LATITUDE!,
+        longitude: config.DELIVERY_LONGITUDE!,
+        maxOrderMinor: config.GRUBHUB_MAX_ORDER_MINOR,
+        logger,
+      });
+      provider = new FakeToolProvider([
+        ...sampleToolManifests.filter((m) => m.server !== "dining"),
+        ...dining.manifests,
+      ]);
+      for (const [tool, fn] of Object.entries(dining.handlers)) provider.handle("dining", tool, fn);
+      wiring.dining = "real"; // Grubhub
+    } else provider = new FakeToolProvider();
+    fakes.toolProvider = provider;
     const fakeConnections = (fakes.connections = new FakeConnectionService({ defaultConnected: true }));
     const fakePermissions = (fakes.permissions = new FakePermissionResolver());
     const fakeApprovals = (fakes.approvals = new FakeApprovalService({
@@ -353,6 +381,28 @@ export async function buildContainer(
     optionsTool: config.GROUP_MEAL_OPTIONS_TOOL,
   });
 
+  // Real group orders (payer approval → place → tracking). Scheduled with the memory jobs.
+  const orders = new OrderService({
+    tasks,
+    gateway,
+    messaging,
+    approvals: approvals as unknown as WebApprovals,
+    audit,
+    clock,
+    logger,
+    statusTool: config.GROUP_MEAL_OPTIONS_TOOL.replace(/__.+$/, "__order_status"),
+  });
+  const orderJob = { name: "orders.track", everyMs: 30_000, run: () => orders.trackOrders() };
+  maintenance = memoryMaintenance
+    ? MaintenanceScheduler.forMemory(memoryMaintenance, {
+        cleanupEveryMs: config.MEMORY_CLEANUP_INTERVAL_MS,
+        purgeEveryMs: config.MEMORY_PURGE_INTERVAL_MS,
+        groupIngestEveryMs: config.MEMORY_GROUP_INGEST_INTERVAL_MS,
+        extraJobs: [orderJob],
+        logger,
+      })
+    : new MaintenanceScheduler([orderJob], logger);
+
   const pipeline = new TurnPipelineImpl({
     queue,
     messageLog,
@@ -416,6 +466,7 @@ export async function buildContainer(
     pipeline,
     worker,
     maintenance,
+    orders,
     wiring,
     fakes,
     close: async () => {

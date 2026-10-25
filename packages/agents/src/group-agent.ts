@@ -61,6 +61,15 @@ export type GroupAgentDeps = {
 const TASK_TYPE = "group_meal";
 const ToolOptionsSchema = z.object({ options: z.array(MealOptionSchema) });
 const ToolMenuSchema = z.object({ restaurant: z.string().optional(), items: z.array(MenuItemSchema) });
+const ToolQuoteSchema = z.object({
+  provider: z.string().default("provider"),
+  cartId: z.string().min(1),
+  totalMinor: z.number().int().positive().nullable(),
+  subtotalMinor: z.number().int().nonnegative(),
+  taxMinor: z.number().int().nullable().optional(),
+  feesMinor: z.number().int().nullable().optional(),
+  tipMinor: z.number().int().nonnegative().default(0),
+});
 type GroupOrder = NonNullable<GroupMealState["order"]>;
 type Task = AgentTask<GroupMealState>;
 
@@ -348,6 +357,12 @@ export class GroupAgentImpl implements GroupAgent {
     const order = await this.buildOrder(ctx, task, option, io);
     if (order) task = await this.update(ctx, task, "decided", { ...task.state, order });
 
+    // Real provider (e.g. Grubhub): quote the exact cart, then ask the payer to approve that amount.
+    if (order) {
+      const real = await this.quoteAndRequestPayment(ctx, task, option, order, io);
+      if (real) return { replies: [real], memoryCandidates };
+    }
+
     // Money never moves on a chat message: hand the payer an authenticated approval page (spec 4.2 step 10).
     try {
       const handoff = await this.deps.approvals.createSpendHandoff(ctx, {
@@ -473,6 +488,76 @@ export class GroupAgentImpl implements GroupAgent {
     return order;
   }
 
+  /**
+   * Quote the real cart (provider total incl. tax/fees; no charge) and propose submit_order through
+   * the gateway — a spend tool, so the gateway asks the payer privately to approve the exact amount.
+   * Returns the group message, or null when the provider has no quotes (test data: old flow).
+   */
+  private async quoteAndRequestPayment(
+    ctx: TurnContext,
+    task: Task,
+    option: MealOption,
+    order: GroupOrder,
+    io: TurnIO,
+  ): Promise<string | null> {
+    const quoteTool = this.deps.optionsTool.replace(/__.+$/, "__quote_order");
+    const submitTool = this.deps.optionsTool.replace(/__.+$/, "__submit_order");
+    const items = order.lines.flatMap((l) =>
+      l.items.map((i) => ({ itemId: i.itemId, quantity: i.quantity })),
+    );
+    const q = await this.deps.runtime.invokeTool(ctx, quoteTool, { optionId: option.id, items }, io);
+    if (q.status === "denied" && q.reasonCode === "tool_unknown") return null;
+    if (q.status !== "executed" || !q.result.ok) {
+      await this.update(ctx, task, "failed", task.state);
+      return `${this.describeOrder(option.name, order, false)}\nI couldn't get a price from ${option.name} right now, so nothing was ordered. Try again in a bit.`;
+    }
+    const quote = ToolQuoteSchema.safeParse(q.result.data); // provider output is untrusted data
+    if (!quote.success) return null;
+    if (quote.data.totalMinor === null) {
+      await this.update(ctx, task, "failed", task.state);
+      return `${this.describeOrder(option.name, order, false)}\n${option.name} didn't give me the final total (tax and fees), so I can't ask anyone to pay yet. Nothing was ordered.`;
+    }
+    const total = quote.data.totalMinor;
+    const priced: GroupOrder = {
+      ...order,
+      totalMinor: total,
+      splits: shareSplits(order, total),
+      quote: {
+        provider: quote.data.provider,
+        cartId: quote.data.cartId,
+        totalMinor: total,
+        subtotalMinor: quote.data.subtotalMinor,
+        taxMinor: quote.data.taxMinor ?? null,
+        feesMinor: quote.data.feesMinor ?? null,
+        tipMinor: quote.data.tipMinor,
+      },
+      delivery: { platform: ctx.platform, providerConversationId: ctx.providerConversationId },
+    };
+    await this.audit(ctx, "order.quoted", {
+      taskId: task.id,
+      totalMinor: total,
+      provider: quote.data.provider,
+    });
+
+    // Spend → the gateway answers needs_approval and the runtime DMs the payer the approval link.
+    const s = await this.deps.runtime.invokeTool(
+      ctx,
+      submitTool,
+      { cartId: quote.data.cartId, approvedTotalMinor: total },
+      io,
+    );
+    if (s.status !== "needs_approval") {
+      await this.update(ctx, task, "failed", { ...task.state, order: priced });
+      return `${this.describeOrder(option.name, priced, false)}\nI couldn't set up the payment, so nothing was ordered.`;
+    }
+    await this.update(ctx, task, "awaiting_payment", {
+      ...task.state,
+      order: { ...priced, approvalId: s.approvalId },
+    });
+    const payer = this.nameIn(priced, priced.payerUserId);
+    return `${this.describeOrder(option.name, priced, false)}\n${payer}, I sent you a private link to approve ${formatMoney(total, priced.currency)}. Nothing is ordered until you do.`;
+  }
+
   private nameIn(order: GroupOrder, userId: string): string {
     return order.lines.find((l) => l.userId === userId)?.name ?? "the payer";
   }
@@ -486,10 +571,13 @@ export class GroupAgentImpl implements GroupAgent {
     const split = order.splits.length
       ? `Split: ${order.splits.map((x) => `${x.name ?? "someone"} owes ${payer} ${formatMoney(x.owesMinor, order.currency)}`).join(", ")}.`
       : "";
+    const total = order.quote
+      ? `Total ${formatMoney(order.totalMinor, order.currency)} with tax and fees.`
+      : `Total ${formatMoney(order.totalMinor, order.currency)}.`;
     return [
       `Locked in: ${restaurant}. Group order${sandbox ? " (test order - nothing real is ordered)" : ""}:`,
       ...lines,
-      `Total ${formatMoney(order.totalMinor, order.currency)}. ${payer} is paying. ${split}`.trim(),
+      `${total} ${payer} is paying. ${split}`.trim(),
       order.notIncluded.length
         ? `Not included: ${order.notIncluded.join(", ")} (nothing on the menu fit, or no answer).`
         : "",
@@ -617,4 +705,16 @@ export class GroupAgentRegistry implements GroupAgentFactory {
   forConversation(conversationId: string): GroupAgent {
     return new GroupAgentImpl(conversationId, this.deps);
   }
+}
+
+/** Each non-payer's share: their items plus a proportional part of tax/fees (rounded; payer absorbs pennies). */
+function shareSplits(order: NonNullable<GroupMealState["order"]>, totalMinor: number) {
+  const subtotal = order.lines.reduce((n, l) => n + l.subtotalMinor, 0) || 1;
+  return order.lines
+    .filter((l) => l.userId !== order.payerUserId)
+    .map((l) => ({
+      userId: l.userId,
+      name: l.name,
+      owesMinor: Math.round((l.subtotalMinor * totalMinor) / subtotal),
+    }));
 }
