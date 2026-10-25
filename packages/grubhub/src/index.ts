@@ -20,6 +20,9 @@ export {
   grubhubDiningManifests,
   menuItems,
   normalizeStatus,
+  requiredChoices,
   tagsFor,
+  type CartOption,
+  type DeliveryInfo,
   type GrubhubDiningOptions,
 } from "./dining";

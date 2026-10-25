@@ -23,16 +23,24 @@ total on the approval page, and the bot only says "ordered" once Grubhub returns
 ## Setup
 
 1. A dedicated Grubhub account with the **delivery address and a card saved** (in the Grubhub app).
-2. `.env`: `DINING_PROVIDER=grubhub`, `DELIVERY_LATITUDE=…`, `DELIVERY_LONGITUDE=…`
-   (optional `GRUBHUB_MAX_ORDER_MINOR`, `GRUBHUB_SESSION_DIR`). Needs `uv` installed (for `uvx`).
+2. `.env`: `DINING_PROVIDER=grubhub`, `DELIVERY_LATITUDE/LONGITUDE`, `DELIVERY_STREET/CITY/STATE/POSTAL_CODE`, `DELIVERY_PHONE`, `DELIVERY_EMAIL`
+   (optional `GRUBHUB_MAX_ORDER_MINOR`, `GRUBHUB_SESSION_DIR`). Needs `uv` installed.
 3. Sign in once: `pnpm --filter @campus/grubhub login` (one-time code by email). The session is saved
    in `.data/grubhub` — it contains credentials; never commit or share it.
 
-## Verified / not verified (2026-10-25)
+## How it runs
 
-- Verified live (anonymous): search near ASU finds Taco Bell (open, delivering); menu with item ids,
-  prices and required option groups; creating a cart.
-- **Not verified yet:** an anonymous cart has no price breakdown. Whether a signed-in cart reports
-  the final total, and whether `place_order` works without a delivery-address step (grubhub-mcp has
-  no tool for setting the cart's address), needs a signed-in test. If no exact total comes back, the
-  bot says so and never asks anyone to pay.
+`py/campus_grubhub.py` starts the unmodified grubhub-mcp server (login, search, menus, tracking) and
+adds cart tools that call the cart endpoints Grubhub actually serves. grubhub-mcp's own cart tools
+call endpoints that don't exist (`/carts/{id}/line_items`, `/carts/{id}/submit`), so its carts stay empty.
+Started with `uv run --no-project --with grubhub-mcp==1.1.7 python py/campus_grubhub.py`.
+
+## Verified / not verified (2026-10-25, live, Taco Bell near ASU)
+
+- Verified: search, menus, item option trees; building a priced cart. Steps, in order: empty cart →
+  `PUT delivery_info` (address + phone + email; required before items, or items are refused as
+  "not open") → `POST lines` (required nested choices in `child_options`) → `POST tip` → read
+  `charges.diner_grand_total`. Example: 2 burritos = $14.62 + $2.49 fees + $1.38 tax + $2.00 tip = $20.49.
+- **Not done: placing the order.** The checkout call hasn't been verified, so `dining__submit_order`
+  fails closed (`checkout_not_available`): nothing is charged and the group is told the order
+  wasn't placed. It also needs a card saved on the Grubhub account.

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { HarnessError, type Logger } from "@campus/contracts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -10,6 +11,8 @@ import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotoc
 // The Grubhub login session lives in GRUBHUB_SESSION_DIR (server-side, gitignored, never logged).
 
 export const GRUBHUB_MCP_VERSION = "1.1.7";
+
+const WRAPPER_PATH = fileURLToPath(new URL("../py/campus_grubhub.py", import.meta.url));
 
 /** Calls one grubhub-mcp tool and returns its parsed JSON. Injected in tests. */
 export type GrubhubCaller = (tool: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -82,8 +85,17 @@ export class GrubhubProcess {
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
       const transport = new StdioClientTransport({
-        command: this.opts.command ?? "uvx",
-        args: this.opts.args ?? ["--quiet", "--from", `grubhub-mcp==${GRUBHUB_MCP_VERSION}`, "grubhub"],
+        command: this.opts.command ?? "uv",
+        // Our wrapper (py/campus_grubhub.py): the unmodified grubhub-mcp server plus working cart tools.
+        args: this.opts.args ?? [
+          "run",
+          "--quiet",
+          "--no-project",
+          "--with",
+          `grubhub-mcp==${GRUBHUB_MCP_VERSION}`,
+          "python",
+          WRAPPER_PATH,
+        ],
         // UTF-8 stdio: on Windows Python otherwise writes the legacy code page, and a menu with "™"
         // breaks the JSON-RPC reply (the call then hangs until timeout).
         env: {

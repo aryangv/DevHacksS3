@@ -1,7 +1,7 @@
 // P2 contribution (owner of this folder: P1 — please review). A real-provider group order end to end
 // through P1's pipeline, with Grubhub replaced by a fake shaped like real grubhub-mcp responses:
 // group asks → proposal → confirm → each agent picks items → real quote (tax/fees) → payer approves
-// the exact total → order placed through the gateway → delivery updates posted to the same group.
+// the exact total → (checkout not wired yet: fails closed, nothing charged).
 import type { GroupMealState } from "@campus/contracts";
 import type { Simulator } from "@campus/worker";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -31,6 +31,17 @@ const MENU = {
   },
 };
 const FEES_AND_TAX = 412;
+const GRUBHUB_ENV = {
+  DINING_PROVIDER: "grubhub",
+  DELIVERY_LATITUDE: "33.4242",
+  DELIVERY_LONGITUDE: "-111.9281",
+  DELIVERY_STREET: "301 E Orange St",
+  DELIVERY_CITY: "Tempe",
+  DELIVERY_STATE: "AZ",
+  DELIVERY_POSTAL_CODE: "85281",
+  DELIVERY_PHONE: "4805550100",
+  DELIVERY_EMAIL: "demo@example.com",
+};
 
 let sim: Simulator;
 let calls: Array<{ tool: string; args: Record<string, unknown> }>;
@@ -64,20 +75,27 @@ function fakeGrubhub() {
         return MENU;
       case "get_menu_item":
         return { menu_item: { choice_category_list: [] } };
-      case "create_cart":
-      case "add_to_cart":
-        cartSubtotal += (prices.get(String(args.menu_item_id)) ?? 0) * Number(args.quantity ?? 1);
+      case "cart_new":
         return { id: "cart-1" };
-      case "get_cart":
+      case "cart_set_delivery":
+      case "cart_set_tip":
+        return { ok: true };
+      case "cart_add_line":
+        cartSubtotal += (prices.get(String(args.menu_item_id)) ?? 0) * Number(args.quantity ?? 1);
+        return { id: "line-1" };
+      case "cart_read":
+        // Shape Grubhub returned live (2026-10-25).
         return {
           id: "cart-1",
           charges: {
-            total: { amount: totalOverride ?? cartSubtotal + FEES_AND_TAX },
-            diner_subtotal: { amount: cartSubtotal },
+            lines: { line_items: cartSubtotal ? [{ id: "line-1" }] : [] },
+            diner_subtotal: cartSubtotal,
+            fees: { total: FEES_AND_TAX - 100 },
+            taxes: { total: 100 },
+            tip: { amount: 0, type: "INCLUDE_IN_BILL" },
+            diner_grand_total: totalOverride ?? cartSubtotal + FEES_AND_TAX,
           },
         };
-      case "place_order":
-        return { order_id: "GH-ORDER-1" };
       case "track_order":
         return { status: tracking.shift() ?? "DELIVERED", estimated_delivery_minutes: 9 };
       default:
@@ -92,7 +110,7 @@ beforeEach(async () => {
   totalOverride = null;
   tracking = ["CONFIRMED", "OUT_FOR_DELIVERY", "DELIVERED"];
   sim = await makeSim({
-    env: { DINING_PROVIDER: "grubhub", DELIVERY_LATITUDE: "33.4242", DELIVERY_LONGITUDE: "-111.9281" },
+    env: GRUBHUB_ENV,
     overrides: { diningCaller: fakeGrubhub() },
   });
 });
@@ -121,7 +139,7 @@ describe("real-provider group order (Grubhub, faked at the process boundary)", (
     expect(sim.c.wiring.dining).toBe("real");
   });
 
-  it("quotes the exact cart, asks only the payer to approve, places it once approved, then tracks delivery", async () => {
+  it("quotes the exact cart and asks only the payer to approve; checkout fails closed for now", async () => {
     const confirm = await planAndConfirm();
     const groupText = confirm.sent.filter((m) => m.kind === "group").at(-1)!.text;
     const task = (await order())!;
@@ -141,30 +159,16 @@ describe("real-provider group order (Grubhub, faked at the process boundary)", (
     const dm = confirm.sent.find((m) => m.kind === "dm")!;
     expect(dm.to).toBe(CASEY.externalId);
     expect(dm.text).toContain(`/approve/${o.approvalId}`);
-    expect(calls.some((c) => c.tool === "place_order")).toBe(false); // nothing ordered yet
+    expect(calls.find((c) => c.tool === "cart_set_delivery")!.args).toMatchObject({ postal_code: "85281" });
 
-    // Someone else can't approve; the payer can, exactly once.
+    // Someone else can't approve. The payer can, but checkout isn't wired yet: nothing is placed or
+    // charged, and the group is told so (never "ordered").
     expect((await sim.c.orders.approveAndPlace(o.approvalId!, AVERY.userId)).status).toBe("forbidden");
-    const placed = await sim.c.orders.approveAndPlace(o.approvalId!, CASEY.userId);
-    expect(placed).toMatchObject({ status: "placed", orderId: "GH-ORDER-1" });
-    expect(calls.filter((c) => c.tool === "place_order")).toHaveLength(1);
-    expect((await sim.c.orders.approveAndPlace(o.approvalId!, CASEY.userId)).status).toBe("not_found");
-    const groupMsgs = () => sim.c.fakes.messaging!.to(GROUP).map((m) => m.text);
-    expect(groupMsgs().at(-1)).toMatch(
-      /^Order placed with Taco Bell on Grubhub: \$\d+\.\d\d, paid by Casey\./,
-    );
-
-    // Delivery updates land in the same group; the split is repeated on delivery.
-    await sim.c.orders.trackOrders();
-    expect(groupMsgs().at(-1)).toBe("Taco Bell is preparing the order.");
-    await sim.c.orders.trackOrders();
-    expect(groupMsgs().at(-1)).toBe("The food is on the way (about 9 min).");
-    await sim.c.orders.trackOrders();
-    expect(groupMsgs().at(-1)).toMatch(/^Delivered\. Enjoy! Split: .*owes Casey \$/);
-    const done = await sim.c.tasks.get<GroupMealState>(task.id);
-    expect(done!.status).toBe("completed");
-    await sim.c.orders.trackOrders();
-    expect(groupMsgs().filter((t) => t.startsWith("Delivered"))).toHaveLength(1);
+    const r = await sim.c.orders.approveAndPlace(o.approvalId!, CASEY.userId);
+    expect(r.status).toBe("failed");
+    expect(r.message).toMatch(/wasn't placed.*Nothing was charged/);
+    const groupMsgs = sim.c.fakes.messaging!.to(GROUP).map((m) => m.text);
+    expect(groupMsgs.some((t) => t.startsWith("Order placed"))).toBe(false);
   });
 
   it("refuses to place the order if the provider's total changed after approval was requested", async () => {
@@ -174,7 +178,6 @@ describe("real-provider group order (Grubhub, faked at the process boundary)", (
     const r = await sim.c.orders.approveAndPlace(o.approvalId!, CASEY.userId);
     expect(r.status).toBe("failed");
     expect(r.message).toMatch(/changed the total to \$/);
-    expect(calls.some((c) => c.tool === "place_order")).toBe(false);
   });
 
   it("never asks anyone to pay when the provider gives no final total", async () => {
@@ -182,10 +185,10 @@ describe("real-provider group order (Grubhub, faked at the process boundary)", (
     const caller = fakeGrubhub();
     await sim.c.close();
     sim = await makeSim({
-      env: { DINING_PROVIDER: "grubhub", DELIVERY_LATITUDE: "33.4242", DELIVERY_LONGITUDE: "-111.9281" },
+      env: GRUBHUB_ENV,
       overrides: {
         diningCaller: async (tool, args) =>
-          tool === "get_cart" ? { id: "cart-1", charges: null } : caller(tool, args),
+          tool === "cart_read" ? { id: "cart-1", charges: null } : caller(tool, args),
       },
     });
     const confirm = await planAndConfirm();
@@ -193,6 +196,5 @@ describe("real-provider group order (Grubhub, faked at the process boundary)", (
       "didn't give me the final total",
     );
     expect(confirm.sent.some((m) => m.kind === "dm")).toBe(false);
-    expect(calls.some((c) => c.tool === "place_order")).toBe(false);
   });
 });

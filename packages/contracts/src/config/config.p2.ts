@@ -39,6 +39,15 @@ const schema = z.object({
   /** Where food is delivered (search + menus are location-specific). */
   DELIVERY_LATITUDE: z.coerce.number().min(-90).max(90).optional(),
   DELIVERY_LONGITUDE: z.coerce.number().min(-180).max(180).optional(),
+  /** Delivery address + the contact the courier uses (Grubhub requires them on every cart). */
+  DELIVERY_STREET: optionalString(),
+  DELIVERY_UNIT: optionalString(),
+  DELIVERY_CITY: optionalString(),
+  DELIVERY_STATE: optionalString(),
+  DELIVERY_POSTAL_CODE: optionalString(),
+  DELIVERY_INSTRUCTIONS: optionalString(),
+  DELIVERY_PHONE: optionalString(),
+  DELIVERY_EMAIL: optionalString(),
   /** Grubhub login session (contains credentials; gitignored). */
   GRUBHUB_SESSION_DIR: z.string().default("./.data/grubhub"),
   /** Hard cap per real order, in cents. */
@@ -60,7 +69,16 @@ export const configSectionP2: ConfigSection<typeof schema> = {
     ...(cfg.DEV_SIMULATOR && all.NODE_ENV === "production"
       ? ["DEV_SIMULATOR=false (not allowed in production)"]
       : []),
-    ...missingIf(cfg.DINING_PROVIDER === "grubhub", cfg, ["DELIVERY_LATITUDE", "DELIVERY_LONGITUDE"]),
+    ...missingIf(cfg.DINING_PROVIDER === "grubhub", cfg, [
+      "DELIVERY_LATITUDE",
+      "DELIVERY_LONGITUDE",
+      "DELIVERY_STREET",
+      "DELIVERY_CITY",
+      "DELIVERY_STATE",
+      "DELIVERY_POSTAL_CODE",
+      "DELIVERY_PHONE",
+      "DELIVERY_EMAIL",
+    ]),
     ...missingIf(cfg.USE_REAL_IDENTITY, all, ["DATABASE_URL"]),
     ...(cfg.USE_REAL_IDENTITY && all.RUNTIME_STORE !== "postgres" ? ["RUNTIME_STORE=postgres"] : []),
   ],

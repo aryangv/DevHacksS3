@@ -24,11 +24,28 @@ export type GrubhubDiningOptions = {
   call: GrubhubCaller;
   latitude: number;
   longitude: number;
+  /** Where the order goes; Grubhub needs it on the cart before items can be added. */
+  delivery: DeliveryInfo;
   /** Hard cap per order (minor units), checked again at submit. */
   maxOrderMinor: number;
   logger?: Logger;
   now?: () => number;
 };
+
+export type DeliveryInfo = {
+  street: string;
+  unit?: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  instructions?: string;
+  /** Courier contact. */
+  phone: string;
+  email: string;
+};
+
+/** A chosen option; nested required choices go in child_options (Grubhub's cart format). */
+export type CartOption = { id: string; quantity: number; child_options: CartOption[] };
 
 type Handler = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -231,27 +248,56 @@ export function normalizeStatus(json: unknown): {
   return { status, etaMinutes: typeof eta === "number" ? Math.round(eta) : null, detail: raw || null };
 }
 
-/** Pull the charged total (minor units) out of a Grubhub cart/bill payload, if present. */
+/**
+ * Pull the charges (cents) out of a Grubhub cart. Live shape (2026-10-25):
+ * charges { diner_subtotal: 414, fees: { total: 449 }, taxes: { total: 70 }, tip: { amount: 100 },
+ *           diner_grand_total: 1033 }. Null total = no line items yet / not priced.
+ */
 export function cartTotal(json: unknown): {
   totalMinor: number | null;
   subtotalMinor: number | null;
   feesMinor: number | null;
   taxMinor: number | null;
+  tipMinor: number | null;
 } {
-  const o = obj(json);
-  const charges = obj(o.charges);
-  const pick = (...vals: unknown[]) => {
-    for (const v of vals) {
-      const a = amount(v);
-      if (a !== null) return a;
-    }
-    return null;
+  const charges = obj(obj(json).charges);
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v) : null);
+  const items = arr(obj(charges.lines).line_items);
+  return {
+    totalMinor: items.length ? num(charges.diner_grand_total) : null,
+    subtotalMinor: num(charges.diner_subtotal),
+    feesMinor: num(obj(charges.fees).total),
+    taxMinor: num(obj(charges.taxes).total),
+    tipMinor: amount(charges.tip),
   };
-  const total = pick(charges.total, charges.diner_total, o.total, obj(o.bill).total, obj(charges.bill).total);
-  const subtotal = pick(charges.diner_subtotal, charges.subtotal, o.subtotal);
-  const tax = pick(charges.taxes, obj(charges.taxes).total, charges.tax, o.tax);
-  const fees = pick(charges.fees, obj(charges.fees).total, charges.service_fee, o.fees);
-  return { totalMinor: total, subtotalMinor: subtotal, feesMinor: fees, taxMinor: tax };
+}
+
+/**
+ * Default choices for every REQUIRED option group of a menu item, recursively (a combo's "Item 1"
+ * option has its own required protein/sauce groups). Picks the restaurant's defaulted options first,
+ * then the first available ones; optional groups are left empty.
+ */
+export function requiredChoices(categories: unknown): CartOption[] {
+  const out: CartOption[] = [];
+  for (const c of arr(categories)) {
+    const cat = obj(c);
+    const qs = obj(cat.quantity_settings);
+    const min = Math.max(
+      typeof cat.min_choice_options === "number" ? cat.min_choice_options : 0,
+      typeof qs.minimum_units === "number" ? qs.minimum_units : 0,
+    );
+    if (min < 1) continue;
+    const opts = arr(cat.choice_option_list)
+      .map(obj)
+      .filter((o) => o.available !== false && str(o.id));
+    const ordered = [
+      ...opts.filter((o) => o.defaulted === true),
+      ...opts.filter((o) => o.defaulted !== true),
+    ];
+    for (const o of ordered.slice(0, min))
+      out.push({ id: str(o.id)!, quantity: 1, child_options: requiredChoices(o.choice_category_list) });
+  }
+  return out;
 }
 
 export function createGrubhubDining(opts: GrubhubDiningOptions): {
@@ -282,25 +328,12 @@ export function createGrubhubDining(opts: GrubhubDiningOptions): {
     return entry;
   }
 
-  /** Default choices for an item's required option groups (min ≥ 1): the first N options. */
-  async function requiredOptions(
-    restaurantId: string,
-    itemId: string,
-  ): Promise<Array<{ id: string; quantity: number }>> {
+  async function requiredOptions(restaurantId: string, itemId: string): Promise<CartOption[]> {
     const json = await call("get_menu_item", { restaurant_id: restaurantId, item_id: itemId, ...where });
-    const item = obj(obj(json).menu_item ?? json);
-    const out: Array<{ id: string; quantity: number }> = [];
-    for (const c of arr(item.choice_category_list)) {
-      const cat = obj(c);
-      const min = typeof cat.min_choice_options === "number" ? cat.min_choice_options : 0;
-      if (min < 1) continue;
-      for (const o of arr(cat.choice_option_list).slice(0, min)) {
-        const id = str(obj(o).id);
-        if (id) out.push({ id, quantity: 1 });
-      }
-    }
-    return out;
+    return requiredChoices(obj(obj(json).menu_item ?? json).choice_category_list);
   }
+
+  const d = opts.delivery;
 
   const handlers: Record<string, Handler> = {
     search_options: async (args) => {
@@ -361,35 +394,35 @@ export function createGrubhubDining(opts: GrubhubDiningOptions): {
       const known = new Set(menu.items.map((i) => i.id));
       if (!items.every((i) => known.has(i.itemId)))
         throw new HarnessError("tool_args_invalid", "item not on the menu");
-      let cartId: string | null = null;
+      // Order matters: Grubhub prices items for the cart's fulfillment, so the delivery address goes
+      // first (without it an item is refused as "not open" when pickup is closed).
+      const cartId = str(obj(await call("cart_new", {})).id);
+      if (!cartId) throw new HarnessError("provider_error", "Grubhub did not return a cart");
+      await call("cart_set_delivery", {
+        cart_id: cartId,
+        street: d.street,
+        city: d.city,
+        state: d.state,
+        postal_code: d.postalCode,
+        latitude: opts.latitude,
+        longitude: opts.longitude,
+        phone: d.phone,
+        email: d.email,
+        ...(d.unit ? { unit: d.unit } : {}),
+        ...(d.instructions ? { instructions: d.instructions } : {}),
+      });
       for (const it of items) {
-        const options = await requiredOptions(restaurantId, it.itemId);
-        if (!cartId) {
-          const created = obj(
-            await call("create_cart", {
-              restaurant_id: restaurantId,
-              menu_item_id: it.itemId,
-              quantity: it.quantity,
-              ...(options.length ? { options } : {}),
-              ...where,
-              is_delivery: true,
-            }),
-          );
-          cartId = str(created.id);
-          if (!cartId) throw new HarnessError("provider_error", "Grubhub did not return a cart");
-        } else {
-          await call("add_to_cart", {
-            cart_id: cartId,
-            menu_item_id: it.itemId,
-            quantity: it.quantity,
-            ...(options.length ? { options } : {}),
-          });
-        }
+        await call("cart_add_line", {
+          cart_id: cartId,
+          restaurant_id: restaurantId,
+          menu_item_id: it.itemId,
+          quantity: it.quantity,
+          options: await requiredOptions(restaurantId, it.itemId),
+        });
       }
       const tipMinor = typeof args.tipMinor === "number" ? args.tipMinor : 0;
-      if (tipMinor > 0) await call("set_tip", { cart_id: cartId!, tip_amount: tipMinor / 100 });
-      const cart = await call("get_cart", { cart_id: cartId! });
-      const t = cartTotal(cart);
+      if (tipMinor > 0) await call("cart_set_tip", { cart_id: cartId, amount_cents: tipMinor });
+      const t = cartTotal(await call("cart_read", { cart_id: cartId }));
       const menuSubtotal = items.reduce(
         (n, i) => n + menu.items.find((m) => m.id === i.itemId)!.priceMinor * i.quantity,
         0,
@@ -404,7 +437,7 @@ export function createGrubhubDining(opts: GrubhubDiningOptions): {
         subtotalMinor: t.subtotalMinor ?? menuSubtotal,
         taxMinor: t.taxMinor,
         feesMinor: t.feesMinor,
-        tipMinor,
+        tipMinor: t.tipMinor ?? tipMinor,
         currency: menu.items[0]?.currency ?? "USD",
       };
     },
@@ -417,22 +450,13 @@ export function createGrubhubDining(opts: GrubhubDiningOptions): {
       if (approved > opts.maxOrderMinor)
         throw new HarnessError("permission_denied", "order is over the spending cap");
       // Exact-quote binding: re-read the cart and refuse if what would be charged changed.
-      const current = cartTotal(await call("get_cart", { cart_id: cartId })).totalMinor;
+      const current = cartTotal(await call("cart_read", { cart_id: cartId })).totalMinor;
       if (current === null || Math.abs(current - approved) > TOTAL_TOLERANCE_MINOR)
         return { provider: "grubhub", placed: false, reason: "total_changed", currentTotalMinor: current };
-      const placed = obj(
-        await call("place_order", {
-          cart_id: cartId,
-          ...(typeof args.tipMinor === "number" && args.tipMinor > 0
-            ? { tip_amount: args.tipMinor / 100 }
-            : {}),
-        }),
-      );
-      const orderId =
-        str(placed.order_id) ?? str(placed.id) ?? str(obj(placed.order).id) ?? str(placed.group_id);
-      if (!orderId)
-        return { provider: "grubhub", placed: false, reason: "no_order_id", outcomeUnknown: true };
-      return { provider: "grubhub", placed: true, orderId, totalMinor: approved };
+      // Checkout isn't wired yet: grubhub-mcp's place_order calls an endpoint Grubhub doesn't serve,
+      // and the real checkout call (attach saved card + check out) hasn't been verified. Fail closed:
+      // nothing is charged and the group is told the order wasn't placed.
+      return { provider: "grubhub", placed: false, reason: "checkout_not_available" };
     },
 
     order_status: async (args) => {

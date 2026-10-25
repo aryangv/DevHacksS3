@@ -285,6 +285,17 @@ export async function buildContainer(
         call,
         latitude: config.DELIVERY_LATITUDE!,
         longitude: config.DELIVERY_LONGITUDE!,
+        // Required by the config loader when DINING_PROVIDER=grubhub.
+        delivery: {
+          street: config.DELIVERY_STREET!,
+          city: config.DELIVERY_CITY!,
+          state: config.DELIVERY_STATE!,
+          postalCode: config.DELIVERY_POSTAL_CODE!,
+          phone: config.DELIVERY_PHONE!,
+          email: config.DELIVERY_EMAIL!,
+          ...(config.DELIVERY_UNIT ? { unit: config.DELIVERY_UNIT } : {}),
+          ...(config.DELIVERY_INSTRUCTIONS ? { instructions: config.DELIVERY_INSTRUCTIONS } : {}),
+        },
         maxOrderMinor: config.GRUBHUB_MAX_ORDER_MINOR,
         logger,
       });
