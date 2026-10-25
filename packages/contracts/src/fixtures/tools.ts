@@ -1,4 +1,4 @@
-import type { MealOption } from "../schemas/coordination";
+import type { MealOption, MenuItem } from "../schemas/coordination";
 import type { ToolManifest } from "../schemas/tools";
 
 // Sample tool manifests (fake MCP servers). Risk classes per spec 6.6.
@@ -16,6 +16,19 @@ export const diningManifests: ToolManifest[] = [
         cuisine: { type: "string" },
         partySize: { type: "integer", minimum: 1 },
       },
+      additionalProperties: false,
+    },
+    riskClass: "read",
+    defaultMode: "allow",
+  },
+  {
+    server: "dining",
+    name: "get_menu",
+    description: "Get the menu (items, prices, dietary tags) for one restaurant option.",
+    inputSchema: {
+      type: "object",
+      properties: { optionId: { type: "string" } },
+      required: ["optionId"],
       additionalProperties: false,
     },
     riskClass: "read",
@@ -113,6 +126,62 @@ export const sampleMealOptions: MealOption[] = [
     tags: ["vegetarian_friendly"],
   },
 ];
+
+const item = (
+  id: string,
+  name: string,
+  priceMinor: number,
+  tags: string[] = [],
+  category: MenuItem["category"] = "main",
+): MenuItem => ({ id, name, priceMinor, currency: "USD", category, tags });
+
+/** Sample menus for the fake dining provider (test data; no real restaurant). */
+export const sampleMenus: Record<string, MenuItem[]> = {
+  opt_thai_basil: [
+    item("tb_pad_thai_chicken", "Chicken Pad Thai", 1450),
+    item("tb_pad_see_ew_tofu", "Tofu Pad See Ew", 1350, ["vegetarian_friendly", "vegan_options"]),
+    item("tb_green_curry_veg", "Vegetable Green Curry", 1400, [
+      "vegetarian_friendly",
+      "vegan_options",
+      "gluten_free",
+    ]),
+    item("tb_basil_beef", "Thai Basil Beef", 1550, ["gluten_free"]),
+    item("tb_drunken_noodles_shrimp", "Shrimp Drunken Noodles", 1600),
+    item("tb_spring_rolls", "Spring Rolls", 650, ["vegetarian_friendly", "vegan_options"], "side"),
+    item("tb_thai_tea", "Thai Iced Tea", 450, ["vegetarian_friendly", "gluten_free"], "drink"),
+  ],
+  opt_taco_town: [
+    item("tt_bean_burrito", "Bean and Cheese Burrito", 850, ["vegetarian_friendly"]),
+    item("tt_chicken_quesadilla", "Chicken Quesadilla", 1050, ["halal"]),
+    item("tt_steak_tacos", "Steak Tacos (3)", 1150),
+    item("tt_veggie_bowl", "Veggie Burrito Bowl", 1000, [
+      "vegetarian_friendly",
+      "vegan_options",
+      "gluten_free",
+    ]),
+    item("tt_chips_guac", "Chips and Guacamole", 550, ["vegetarian_friendly", "vegan_options"], "side"),
+  ],
+  opt_burger_barn: [
+    item("bb_classic_burger", "Classic Burger", 1100),
+    item("bb_chicken_sandwich", "Crispy Chicken Sandwich", 1150),
+    item("bb_veggie_burger", "Veggie Burger", 1200, ["vegetarian_friendly"]),
+    item("bb_fries", "Fries", 400, ["vegetarian_friendly", "vegan_options"], "side"),
+  ],
+  opt_sushi_go: [
+    item("sg_salmon_roll", "Salmon Roll", 1400, ["gluten_free"]),
+    item("sg_veggie_roll", "Avocado Cucumber Roll", 1100, [
+      "vegetarian_friendly",
+      "vegan_options",
+      "gluten_free",
+    ]),
+    item("sg_chicken_teriyaki", "Chicken Teriyaki Bowl", 1600),
+  ],
+  opt_pasta_place: [
+    item("pp_marinara", "Spaghetti Marinara", 1400, ["vegetarian_friendly", "vegan_options"]),
+    item("pp_alfredo", "Fettuccine Alfredo", 1600, ["vegetarian_friendly"]),
+    item("pp_meatball", "Spaghetti and Meatballs", 1700),
+  ],
+};
 
 /** Adversarial tool output used by injection tests (spec 6.7, 14). */
 export const injectedToolResult = {

@@ -179,36 +179,69 @@ export async function registerDevSimulator(app: FastifyInstance, c: Container): 
       if (chat.isGroup && !chat.members.includes(from))
         return reply.code(400).send({ error: "not in that group" });
       const m = s.add(chat.guid, from, text);
-      // Exactly what a BlueBubbles Server posts for an incoming iMessage.
-      const event = {
-        type: "new-message",
-        data: {
-          guid: m.id,
-          text,
-          isFromMe: false,
-          itemType: 0,
-          associatedMessageType: null,
-          dateCreated: m.at,
-          handle: { address: from, service: "iMessage" },
-          chats: [
-            {
-              guid: chat.guid,
-              style: chat.isGroup ? 43 : 45,
-              displayName: chat.isGroup ? chat.name : null,
-              participants: chat.isGroup ? chat.members.map((address) => ({ address })) : [],
-            },
-          ],
-        },
-      };
-      const res = await app.inject({
-        method: "POST",
-        url: `/webhooks/bluebubbles?token=${encodeURIComponent(c.config.BLUEBUBBLES_WEBHOOK_SECRET ?? "")}`,
-        headers: { "content-type": "application/json" },
-        payload: JSON.stringify(event),
-      });
-      return { webhook: res.statusCode, result: res.json() };
+      return deliver(chat, from, m, text, null);
     },
   );
+
+  // A tapback, exactly as BlueBubbles reports one: associatedMessageType "like", the target's guid.
+  app.post<{ Body: { from?: string; messageId?: string } }>(
+    "/dev/chat/react",
+    { preHandler: guard },
+    async (req, reply) => {
+      const from = String(req.body?.from ?? "");
+      const target = s.messages.find((m) => m.id === req.body?.messageId);
+      const chat = target ? s.chats.get(target.chatGuid) : undefined;
+      if (!E164.test(from) || !target || !chat) return reply.code(404).send({ error: "unknown message" });
+      if (!chat.members.includes(from)) return reply.code(400).send({ error: "not in that chat" });
+      const m = s.add(
+        chat.guid,
+        from,
+        `👍 to "${target.text.slice(0, 40)}${target.text.length > 40 ? "…" : ""}"`,
+      );
+      return deliver(chat, from, m, `Liked “${target.text.slice(0, 60)}”`, {
+        type: "like",
+        target: target.id,
+      });
+    },
+  );
+
+  /** Post to the real webhook exactly what a BlueBubbles Server posts for an incoming iMessage. */
+  async function deliver(
+    chat: SimChat,
+    from: string,
+    m: SimMessage,
+    text: string,
+    reaction: { type: string; target: string } | null,
+  ) {
+    const event = {
+      type: "new-message",
+      data: {
+        guid: m.id,
+        text,
+        isFromMe: false,
+        itemType: 0,
+        associatedMessageType: reaction ? reaction.type : null,
+        ...(reaction ? { associatedMessageGuid: `p:0/${reaction.target}` } : {}),
+        dateCreated: m.at,
+        handle: { address: from, service: "iMessage" },
+        chats: [
+          {
+            guid: chat.guid,
+            style: chat.isGroup ? 43 : 45,
+            displayName: chat.isGroup ? chat.name : null,
+            participants: chat.isGroup ? chat.members.map((address) => ({ address })) : [],
+          },
+        ],
+      },
+    };
+    const res = await app.inject({
+      method: "POST",
+      url: `/webhooks/bluebubbles?token=${encodeURIComponent(c.config.BLUEBUBBLES_WEBHOOK_SECRET ?? "")}`,
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify(event),
+    });
+    return { webhook: res.statusCode, result: res.json() as unknown };
+  }
 
   app.post("/dev/chat/ingest", { preHandler: guard }, async () => {
     if (!c.maintenance) return { ran: false, reason: "real memory is off (USE_REAL_MEMORY=false)" };
@@ -283,7 +316,12 @@ function render() {
     const row = el("div", { className: "card" }); row.style.margin = "6px 0"; row.style.padding = "8px 12px";
     if (m.from === "bot") row.style.borderColor = "var(--accent)";
     row.append(el("div", { className: "small muted" }, nameOf(m.from)));
-    const body = el("div"); linkify(body, m.text); row.append(body); return row;
+    const body = el("div"); linkify(body, m.text); row.append(body);
+    if (m.from === "bot") { const like = el("button", { className: "secondary", title: "Tapback 👍 as " + nameOf(who()) }, "👍");
+      like.style.marginTop = "6px"; like.style.padding = "2px 10px";
+      like.onclick = async () => { const r = await post("/dev/chat/react", { from: who(), messageId: m.id }); if (!r.ok) $("err").textContent = r.data.error || "failed"; refresh(); };
+      row.append(like); }
+    return row;
   }));
   if (atBottom) t.scrollTop = t.scrollHeight;
   $("wiring").textContent = "Wiring: " + Object.entries(state.wiring).map(([k, v]) => k + "=" + v).join(", ");

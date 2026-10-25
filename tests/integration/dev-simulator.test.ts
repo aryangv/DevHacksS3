@@ -23,6 +23,8 @@ const ENV = {
   APP_ORIGIN: "http://localhost",
 };
 const AVERY = "+15555550101";
+const BLAKE = "+15555550102";
+const CASEY = "+15555550103";
 
 let c: Container;
 let app: Awaited<ReturnType<typeof buildServer>>;
@@ -61,7 +63,7 @@ afterEach(async () => {
 });
 
 type SimState = {
-  messages: Array<{ chatGuid: string; from: string; text: string }>;
+  messages: Array<{ id: string; chatGuid: string; from: string; text: string }>;
   chats: Array<{ guid: string }>;
 };
 const state = async () => (await app.inject({ method: "GET", url: "/dev/chat/state" })).json() as SimState;
@@ -105,6 +107,65 @@ describe("dev web iMessage simulator", () => {
       ])
     ).rows[0];
     expect(conv).toEqual({ type: "group" });
+  });
+
+  it("👍 on the bot's proposal (and only that message) confirms the group plan — no link, no text", async () => {
+    const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
+      app.inject({
+        method: "POST",
+        url,
+        headers: { "content-type": "application/json", ...headers },
+        payload: JSON.stringify(body),
+      });
+    // Sign Avery and Blake up through the real page + a code texted in the simulator.
+    for (const [address, name] of [
+      [AVERY, "Avery"],
+      [BLAKE, "Blake"],
+    ] as const) {
+      const start = await post("/onboard/start", { address, name }, { origin: ENV.APP_ORIGIN });
+      await post("/dev/chat/send", {
+        from: address,
+        chatGuid: null,
+        text: (start.json() as { code: string }).code,
+      });
+    }
+    const { guid } = (
+      await post("/dev/chat/group", { name: "Dinner", members: [AVERY, BLAKE, CASEY] })
+    ).json() as {
+      guid: string;
+    };
+    await post("/dev/chat/send", {
+      from: AVERY,
+      chatGuid: guid,
+      text: "@agent can we order dinner tonight? under $20 each",
+    });
+    await c.worker.drain();
+    const botLines = async () =>
+      (await state()).messages.filter((m) => m.chatGuid === guid && m.from === "bot");
+    const [onIt, proposal] = await botLines();
+    expect(onIt!.text).toMatch(/^On it/);
+    expect(proposal!.text).toMatch(/^Proposal: .*👍 this message to lock it in/);
+
+    // A 👍 on a different bot message, or from someone unverified, changes nothing.
+    await post("/dev/chat/react", { from: AVERY, messageId: onIt!.id });
+    await post("/dev/chat/react", { from: CASEY, messageId: proposal!.id });
+    await c.worker.drain();
+    expect(await botLines()).toHaveLength(2);
+    const task = async () =>
+      (
+        await c.sql!.query<{ status: string }>(
+          `SELECT status FROM core.agent_tasks WHERE type = 'group_meal'`,
+        )
+      ).rows[0]!;
+    expect((await task()).status).toBe("proposed");
+
+    // Blake's 👍 on the proposal confirms it.
+    await post("/dev/chat/react", { from: BLAKE, messageId: proposal!.id });
+    await c.worker.drain();
+    expect((await task()).status).not.toBe("proposed");
+    expect((await botLines()).length).toBeGreaterThan(2);
+    const reactions = await c.audit.query({ action: "coordination.reaction", limit: 10 });
+    expect(reactions.map((e) => e.detail?.confirms)).toEqual([false, true]); // Casey's never reached the agent
   });
 
   it("answers only to direct localhost requests, never through a tunnel", async () => {

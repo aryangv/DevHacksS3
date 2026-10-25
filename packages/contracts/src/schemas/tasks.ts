@@ -61,7 +61,31 @@ export type GroupMealState = {
     tags: string[];
   }>;
   round: number;
-  proposal?: { optionId: string; acceptCount: number; respondents: number; waitingOn: string[] };
+  proposal?: {
+    optionId: string;
+    acceptCount: number;
+    respondents: number;
+    waitingOn: string[];
+    /** The proposal message we sent; a 👍 on exactly this message confirms. */
+    messageId?: string;
+  };
   decision?: { optionId: string; decidedByUserId: string; decidedAt: string };
   handoff?: { approvalId: string; payerUserId: string; sandbox: boolean };
+  /** Item-level group order built from each member's agent's picks (additive, P2 contribution). */
+  order?: {
+    restaurant: string;
+    currency: string;
+    lines: Array<{
+      userId: string;
+      name: string | null;
+      items: Array<{ itemId: string; name: string; quantity: number; priceMinor: number }>;
+      subtotalMinor: number;
+    }>;
+    /** Members whose agent picked nothing (no acceptable item, or no answer). */
+    notIncluded: string[];
+    totalMinor: number;
+    payerUserId: string;
+    /** Each non-payer owes the payer their own subtotal. */
+    splits: Array<{ userId: string; name: string | null; owesMinor: number }>;
+  };
 };

@@ -128,10 +128,34 @@ describe("normalize", () => {
     expect(m.text).toBe("@agent dinner tonight?");
   });
 
-  it("ignores our own sends, tapbacks, group events, other webhook types and junk", () => {
+  it("tapbacks become reactions on the exact target message; their text is never used", () => {
+    const a = adapter();
+    const like = a.normalize(
+      groupEvent({
+        text: "Liked “Proposal: Thai Basil…”",
+        associatedMessageType: "like",
+        associatedMessageGuid: "p:0/out-42",
+      }),
+    )!;
+    expect(like.text).toBe("");
+    expect(like.reaction).toEqual({ type: "like", targetMessageId: "out-42", removed: false });
+    expect(like.isGroup).toBe(true);
+    expect(
+      a.normalize(dmEvent({ associatedMessageType: "-like", associatedMessageGuid: "bp:out-42" }))!.reaction,
+    ).toEqual({ type: "like", targetMessageId: "out-42", removed: true });
+    expect(
+      a.normalize(dmEvent({ associatedMessageType: 2001, associatedMessageGuid: "out-7" }))!.reaction,
+    ).toMatchObject({ type: "like", removed: false }); // numeric ids on older servers
+    expect(
+      a.normalize(dmEvent({ associatedMessageType: "sticker", associatedMessageGuid: "p:0/x" })),
+    ).toBeNull();
+    expect(a.normalize(dmEvent({ associatedMessageType: "like" }))).toBeNull(); // no target
+    expect(a.normalize(dmEvent())!.reaction).toBeUndefined();
+  });
+
+  it("ignores our own sends, group events, other webhook types and junk", () => {
     const a = adapter();
     expect(a.normalize(dmEvent({ isFromMe: true }))).toBeNull();
-    expect(a.normalize(dmEvent({ associatedMessageType: 2000 }))).toBeNull();
     expect(a.normalize(dmEvent({ itemType: 1 }))).toBeNull();
     expect(a.normalize({ ...dmEvent(), type: "updated-message" })).toBeNull();
     expect(a.normalize(dmEvent({ handle: { address: BOT } }))).toBeNull();

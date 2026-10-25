@@ -4,6 +4,7 @@ import type {
   Logger,
   MessagingAdapter,
   Platform,
+  ReactionType,
   SendOptions,
   SendResult,
 } from "@campus/contracts";
@@ -24,6 +25,26 @@ import type { BlueBubblesHttp } from "./http";
 
 /** Header the webhook route copies the URL's `?token=` into before calling verifyWebhook. */
 export const WEBHOOK_TOKEN_HEADER = "x-campus-webhook-token";
+
+type Reaction = { type: ReactionType; targetMessageId: string; removed: boolean };
+
+/** BlueBubbles' associatedMessageType (server MessageTypeTransformer); numeric ids on older servers. */
+const REACTIONS: Record<string, { type: ReactionType; removed: boolean }> = {};
+(["love", "like", "dislike", "laugh", "emphasize", "question"] as const).forEach((type, i) => {
+  REACTIONS[type] = { type, removed: false };
+  REACTIONS[`-${type}`] = { type, removed: true };
+  REACTIONS[String(2000 + i)] = { type, removed: false };
+  REACTIONS[String(3000 + i)] = { type, removed: true };
+});
+
+/** "p:0/<guid>" (part of a message) or "bp:<guid>" → the reacted message's own guid. */
+function reactionTarget(v: unknown): string | null {
+  if (typeof v !== "string" || !v.trim()) return null;
+  const t = v.trim();
+  const slash = t.lastIndexOf("/");
+  if (slash >= 0) return t.slice(slash + 1) || null;
+  return t.startsWith("bp:") ? t.slice(3) || null : t;
+}
 
 const GROUP_STYLE = 43;
 const DM_STYLE = 45;
@@ -77,6 +98,7 @@ export class BlueBubblesAdapter implements MessagingAdapter {
       isGroup: parsed.isGroup,
       text: parsed.text,
       timestamp: parsed.timestamp,
+      ...(parsed.reaction ? { reaction: parsed.reaction } : {}),
     };
   }
 
@@ -150,17 +172,21 @@ export class BlueBubblesAdapter implements MessagingAdapter {
     participants: string[];
     text: string;
     timestamp: string;
+    reaction?: Reaction;
   } | null {
     if (!isObj(rawEvent) || rawEvent.type !== "new-message" || !isObj(rawEvent.data)) return null;
     const m = rawEvent.data;
     if (m.isFromMe === true) return null; // our own sends echo back as new-message
-    // Tapbacks/reactions and group events (renames, member changes) are not chat messages.
-    if (
-      m.associatedMessageType !== undefined &&
-      m.associatedMessageType !== null &&
-      m.associatedMessageType !== 0
-    )
-      return null;
+    // Tapbacks become reaction events (a 👍 can confirm a proposal); stickers and unknown kinds are
+    // dropped. Group events (renames, member changes) are not chat messages.
+    let reaction: Reaction | undefined;
+    const assoc = m.associatedMessageType;
+    if (assoc !== undefined && assoc !== null && assoc !== 0 && assoc !== "0") {
+      const r = REACTIONS[String(assoc)];
+      const target = reactionTarget(m.associatedMessageGuid);
+      if (!r || !target) return null;
+      reaction = { ...r, targetMessageId: target };
+    }
     if (typeof m.itemType === "number" && m.itemType !== 0) return null;
 
     const guid = str(m.guid);
@@ -173,7 +199,12 @@ export class BlueBubblesAdapter implements MessagingAdapter {
 
     const isGroup = chat!.style === GROUP_STYLE || (chat!.style !== DM_STYLE && chatGuid.includes(";+;"));
     const ms = typeof m.dateCreated === "number" ? m.dateCreated : Date.parse(String(m.dateCreated ?? ""));
-    const text = typeof m.text === "string" ? m.text.replace(OBJECT_REPLACEMENT, "").trim() : "";
+    // A reaction's text is Apple's summary ("Liked “…”"): never treat it as something the person said.
+    const text = reaction
+      ? ""
+      : typeof m.text === "string"
+        ? m.text.replace(OBJECT_REPLACEMENT, "").trim()
+        : "";
     return {
       guid,
       sender,
@@ -182,6 +213,7 @@ export class BlueBubblesAdapter implements MessagingAdapter {
       participants: isGroup ? this.participants(chat!.participants) : [],
       text,
       timestamp: Number.isFinite(ms) ? new Date(ms).toISOString() : new Date().toISOString(),
+      ...(reaction ? { reaction } : {}),
     };
   }
 

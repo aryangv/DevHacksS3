@@ -221,11 +221,17 @@ export class TurnPipelineImpl implements TurnPipeline {
         }
       }
 
-      if (msg.isGroup) await this.ensureActive(conversation, userId, trace);
+      // A tapback never switches a group on; only addressing the agent does.
+      if (msg.isGroup && decision.addressed) await this.ensureActive(conversation, userId, trace);
 
       // [7]–[10] inside the agent (context via broker/memory, model step, gateway, approvals)
       const text = decision.target === "group" ? decision.text : msg.text;
-      const input = { text, senderDisplayName: identity.displayName, history };
+      const input = {
+        text,
+        senderDisplayName: identity.displayName,
+        history,
+        ...(msg.reaction ? { reaction: msg.reaction } : {}),
+      };
       const agentResult = await withTimeout(
         decision.target === "personal"
           ? d.personalAgents.forUser(userId).handleTurn(ctx, input, io)
@@ -298,7 +304,7 @@ export class TurnPipelineImpl implements TurnPipeline {
     return {
       reply: async (raw: string) => {
         const text = toPlainText(raw);
-        if (!text) return;
+        if (!text) return null;
         const opts = { replyTo: msg.providerMessageId };
         const res = msg.isGroup
           ? await d.messaging.sendGroup(msg.providerConversationId, text, opts)
@@ -311,6 +317,7 @@ export class TurnPipelineImpl implements TurnPipeline {
           body: text,
         });
         await audit("reply.sent", { channel: msg.isGroup ? "group" : "dm", chars: text.length });
+        return { messageId: res.messageId };
       },
       dmUser: async (userId: string, raw: string) => {
         const text = toPlainText(raw);

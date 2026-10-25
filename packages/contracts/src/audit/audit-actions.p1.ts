@@ -31,5 +31,7 @@ export const AUDIT_ACTIONS_P1 = [
   "coordination.request",
   "coordination.response",
   "coordination.decision",
+  "coordination.reaction",
+  "coordination.order_built",
   "spend.handoff_requested",
 ] as const;

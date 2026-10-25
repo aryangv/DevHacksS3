@@ -5,6 +5,10 @@ import { z } from "zod";
 export const PlatformSchema = z.enum(["imessage", "discord", "slack", "whatsapp"]);
 export type Platform = z.infer<typeof PlatformSchema>;
 
+/** iMessage tapbacks (BlueBubbles reports which message was reacted to). Additive (P2). */
+export const ReactionTypeSchema = z.enum(["love", "like", "dislike", "laugh", "emphasize", "question"]);
+export type ReactionType = z.infer<typeof ReactionTypeSchema>;
+
 export const InboundMessageSchema = z.strictObject({
   platform: PlatformSchema,
   /** Sendblue `message_handle`. Dedupe key together with `platform`. */
@@ -18,6 +22,13 @@ export const InboundMessageSchema = z.strictObject({
   text: z.string(),
   /** ISO-8601. */
   timestamp: z.string().min(1),
+  /**
+   * Set when this event is a tapback on an earlier message (then `text` is empty). `removed` = the
+   * person took the reaction back. Additive (P2); absent on transports without reactions.
+   */
+  reaction: z
+    .strictObject({ type: ReactionTypeSchema, targetMessageId: z.string().min(1), removed: z.boolean() })
+    .optional(),
 });
 export type InboundMessage = z.infer<typeof InboundMessageSchema>;
 

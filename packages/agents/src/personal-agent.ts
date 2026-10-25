@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type AgentRuntime,
   type AgentTurnInput,
@@ -5,6 +6,7 @@ import {
   type AuditLog,
   type Clock,
   type ContextBroker,
+  ChooseItemsPayloadSchema,
   type CoordinationRequest,
   type CoordinationResponse,
   type DataBlock,
@@ -110,6 +112,8 @@ export class PersonalAgentImpl implements PersonalAgent {
         return this.evaluateOptions(request);
       case "share_constraint":
         return this.shareConstraint(request);
+      case "choose_items":
+        return this.chooseItems(request);
       default:
         return { ...base, status: "rejected", payload: {}, reasonCode: "unsupported_request" };
     }
@@ -153,6 +157,75 @@ export class PersonalAgentImpl implements PersonalAgent {
           payload: { acceptedOptionIds: [] },
           reasonCode: "no_acceptable_option",
         };
+  }
+
+  /**
+   * Group order (P2 contribution): pick one main for the owner from the menu, privately. Hard rules
+   * from the owner's own context (dietary tags, their budget, the group budget) filter items; what
+   * they told their assistant ("I love pad see ew") ranks the rest. Only the chosen item ids leave.
+   */
+  private async chooseItems(request: CoordinationRequest): Promise<CoordinationResponse> {
+    const parsed = ChooseItemsPayloadSchema.safeParse(request.payload);
+    if (!parsed.success)
+      return { taskId: request.taskId, status: "rejected", payload: {}, reasonCode: "invalid_payload" };
+    const ctx = await this.deps.broker.requestContext({
+      taskId: request.taskId,
+      requesterAgentId: this.agentId,
+      subjectUserId: this.userId,
+      purpose: "group_meal",
+      fields: [...MEAL_EVAL_FIELDS],
+      audience: { kind: "agent", id: this.agentId },
+    });
+    if (ctx.status !== "approved")
+      return { taskId: request.taskId, status: "needs_consent", payload: {}, reasonCode: "consent_required" };
+    const { values } = parseContextFields(ctx.fields);
+    const cap = Math.min(
+      values["meal.max_price_per_person_minor"] ?? Number.POSITIVE_INFINITY,
+      parsed.data.budgetPerPersonMinor ?? Number.POSITIVE_INFINITY,
+    );
+    const required = values["meal.required_tags"] ?? [];
+    const mains = parsed.data.menu.filter(
+      (i) => i.category === "main" && i.priceMinor <= cap && required.every((t) => i.tags.includes(t)),
+    );
+    if (!mains.length)
+      return {
+        taskId: request.taskId,
+        status: "rejected",
+        payload: { items: [] },
+        reasonCode: "no_acceptable_item",
+      };
+
+    // Rank by overlap with what the owner said about food (their own memory, read only here).
+    let notes = "";
+    try {
+      const hits = await this.deps.memoryStore.search(
+        { kind: "user", userId: this.userId },
+        {
+          query: `${parsed.data.restaurant} favorite food order ${mains.map((i) => i.name).join(", ")}`,
+          limit: 8,
+        },
+      );
+      notes = hits
+        .map((h) => h.content)
+        .join(" ")
+        .toLowerCase();
+    } catch (err) {
+      this.deps.logger.warn("memory read failed; choosing without favorites", { err });
+    }
+    const score = (name: string) =>
+      name
+        .toLowerCase()
+        .split(/[^a-z]+/)
+        .filter((w) => w.length >= 4 && notes.includes(w)).length;
+    // No stated favorite → a stable per-person choice (same inputs, same pick) so a group with no
+    // preferences doesn't all get the cheapest dish.
+    const tie = (id: string) => createHash("sha256").update(`${this.userId}:${id}`).digest().readUInt32BE(0);
+    const [pick] = [...mains].sort((a, b) => score(b.name) - score(a.name) || tie(a.id) - tie(b.id));
+    return {
+      taskId: request.taskId,
+      status: "accepted",
+      payload: { items: [{ itemId: pick!.id, quantity: 1 }] },
+    };
   }
 
   private async shareConstraint(request: CoordinationRequest): Promise<CoordinationResponse> {

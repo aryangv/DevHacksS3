@@ -4,6 +4,7 @@
 // real implementations, plus consent, revocation and group memory.
 import type { DefaultConsentService, DefaultMemoryStore } from "@campus/context";
 import { FakeSupermemory, serveFakeSupermemory } from "@campus/context/testing";
+import type { GroupMealState } from "@campus/contracts";
 import { createPgliteClient, migrate } from "@campus/db";
 import { Simulator } from "@campus/worker";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -214,6 +215,43 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
       true,
     );
     expect(JSON.stringify(groupDocs)).not.toMatch(/vegetarian|mexican|\$15|\$18/i);
+  });
+
+  // P2 contribution: item-level group order on real memory, no consent setup (default self-access).
+  it("group order: each agent picks within its owner's private rules; split posted; nothing private shown", async () => {
+    await studentsShareInDMs(); // Avery $20 eats anything; Blake vegetarian ≤ $15; Casey no mexican ≤ $18
+    await sim.group(GROUP, AVERY.externalId, ALL_MEMBERS, "@agent dinner tonight? under $20 each");
+    const t = await sim.group(GROUP, CASEY.externalId, ALL_MEMBERS, "@agent confirm");
+    const groupText = t.sent.filter((m) => m.kind === "group").at(-1)!.text;
+    expect(groupText).toMatch(
+      /^Locked in: Thai Basil\. Group order \(test order - nothing real is ordered\):/,
+    );
+
+    const task = (
+      await sql.query<{
+        state_json: { order: NonNullable<GroupMealState["order"]> };
+      }>("SELECT state_json FROM core.agent_tasks WHERE type = 'group_meal'")
+    ).rows[0]!.state_json.order;
+    const { sampleMenus } = await import("@campus/contracts/fixtures");
+    const menu = new Map(sampleMenus.opt_thai_basil!.map((i) => [i.id, i]));
+    const line = (userId: string) => task.lines.find((l) => l.userId === userId)!;
+    expect(task.lines).toHaveLength(3);
+    // Blake: vegetarian and ≤ $15 — only from his own memory, never told to the group.
+    expect(
+      line(BLAKE.userId).items.every((i) => menu.get(i.itemId)!.tags.includes("vegetarian_friendly")),
+    ).toBe(true);
+    expect(line(BLAKE.userId).subtotalMinor).toBeLessThanOrEqual(1500);
+    expect(line(CASEY.userId).subtotalMinor).toBeLessThanOrEqual(1800);
+    expect(task.totalMinor).toBe(task.lines.reduce((n, l) => n + l.subtotalMinor, 0));
+    expect(task.payerUserId).toBe(CASEY.userId);
+    expect(task.splits.map((x) => x.userId).sort()).toEqual([AVERY.userId, BLAKE.userId].sort());
+    expect(groupText).toContain("Casey is paying");
+    // Private caps ($15 / $18 exactly) never appear; menu prices like $15.50 may.
+    expect(groupText).not.toMatch(/vegetarian|mexican|\$15(?![.\d])|\$18(?![.\d])|budget/i);
+    // The payer alone gets the payment link, with the exact total.
+    const dm = t.sent.find((m) => m.kind === "dm")!;
+    expect(dm.to).toBe(CASEY.externalId);
+    expect(dm.text).toContain(`$${(task.totalMinor / 100).toFixed(2)}`);
   });
 
   it("18.9-4 on real memory: a search in A's space never returns B's memories, even for adversarial queries", async () => {

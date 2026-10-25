@@ -229,7 +229,8 @@ describe("Postgres runtime store (PGlite)", () => {
     expect(
       events.rows
         .filter((r) => r.type.startsWith("response."))
-        .every((r) => Object.keys(r.payload).every((k) => k === "acceptedOptionIds")),
+        // Projections only: accepted option ids, or (group order) the picked item ids.
+        .every((r) => Object.keys(r.payload).every((k) => k === "acceptedOptionIds" || k === "items")),
     ).toBe(true);
     const inbound = await sql.query<{ n: number }>(
       "SELECT count(*)::int AS n FROM core.inbound_events WHERE status = 'done'",

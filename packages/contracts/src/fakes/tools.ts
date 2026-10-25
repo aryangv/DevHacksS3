@@ -1,4 +1,4 @@
-import { sampleMealOptions, sampleToolManifests } from "../fixtures/tools";
+import { sampleMealOptions, sampleMenus, sampleToolManifests } from "../fixtures/tools";
 import type {
   ApprovalService,
   CallContext,
@@ -48,6 +48,10 @@ export class FakeToolProvider implements ToolProvider {
           (o) => o.pricePerPersonMinor <= max && (!cuisine || o.cuisine === cuisine),
         ),
       };
+    });
+    this.handle("dining", "get_menu", (args) => {
+      const option = sampleMealOptions.find((o) => o.id === args.optionId);
+      return option ? { restaurant: option.name, items: sampleMenus[option.id] ?? [] } : { items: [] };
     });
     this.handle("dining", "place_order", (args) => ({
       sandbox: true,
