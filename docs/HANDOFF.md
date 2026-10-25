@@ -5,15 +5,16 @@ For the next coding agent picking this up. Read this, then `harness-spec.md` (th
 
 ## Where things are
 
-- Branch **`feat/front-door`**, pushed, **PR #3** open against `main` (not merged; don't merge until a
-  live iMessage test passes). Main has P1 + P3 only.
-- 4 commits on the branch: `cc2a371` (P2 core), `40426a3` (web simulator, model retry), `22a82d1`
-  (👍 confirm, item-level group order), `774aeee` (Grubhub connector, payer approval, tracking).
-- `pnpm check` is green: lint, format, typecheck, **228 tests** (1 skipped). CI on the PR passed for
-  earlier commits (`check` + `migrate-postgres`).
-- P4 (tools/approvals/vault, owner MonishC05) is on branch **`p4`**, stage 1, **not merged**, not wired.
-  It uses its own local types (not `@campus/contracts`), exports no `createToolsModule` /
-  `createApprovalsModule`, and its migrations use 12-digit timestamps (our runner needs 14).
+- **`main` has everything** (P1, P2 `feat/front-door`, P3, P4 `p4` stage 2), merged 2026-10-25 via
+  branch `integrate/main`. Not yet tested on real iMessage.
+- `pnpm check` is green: lint, format, typecheck, 229 vitest tests + 71 P4 `node:test` tests.
+  `harness/tests/maintenance.test.ts` (timer-based) is occasionally flaky under load.
+- **P4 is merged but NOT wired into the pipeline** (`USE_REAL_TOOLS` stays off; the dining tools still
+  run on the interim provider). P4 uses its own local types (not `@campus/contracts`) and exports no
+  `createToolsModule` / `createApprovalsModule`; wiring it is the next integration step. Merge fixes:
+  migrations renamed to 14-digit timestamps (`p4/202610250200xx_*`), the vault-grants migration
+  defaults to P1's `campus_app` / `campus_gateway` roles, `tools`/`approvals` typecheck with P4's own
+  tsconfig, and their `node:test` suites run from `pnpm test` (excluded from vitest).
 - The user owns P2 and P3. P1 is Tarun (`@tarunchottera204`). Small P1 edits were allowed **if
   flagged** in the PR (they're listed in PR #3's description/comment).
 
@@ -78,7 +79,7 @@ The user wants **as few external links as possible**: confirmations by 👍 tapb
 (Python, via `uvx`) over stdio. Maps search/menu/quote/submit/status. Menu uses `get_restaurant`
 (~0.5 MB) not `get_menu` (~70 MB for Taco Bell → timeouts). UTF-8 env for the Python process.
 
-## The blocker: Grubhub cannot place orders through grubhub-mcp
+## Grubhub status (cart + real total work; checkout not yet)
 
 Verified live 2026-10-25 against `api-gtm.grubhub.com` (Grubhub's private app API):
 - ✅ anonymous search near ASU (Taco Bell id `926742`), menus, item option groups.
