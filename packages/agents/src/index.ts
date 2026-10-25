@@ -1,0 +1,6 @@
+// @campus/agents — owner: P1. Personal/group agents, coordination bus, deterministic coordinator.
+export * from "./coordinator";
+export * from "./bus";
+export * from "./personal-agent";
+export * from "./group-agent";
+export * from "./prompts";

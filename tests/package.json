@@ -1,0 +1,21 @@
+{
+  "name": "@campus/integration-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared cross-package acceptance tests (spec 18.9; owner: P1, others contribute via PR)",
+  "dependencies": {
+    "@campus/agents": "workspace:*",
+    "@campus/approvals": "workspace:*",
+    "@campus/context": "workspace:*",
+    "@campus/contracts": "workspace:*",
+    "@campus/db": "workspace:*",
+    "@campus/harness": "workspace:*",
+    "@campus/identity": "workspace:*",
+    "@campus/messaging": "workspace:*",
+    "@campus/tools": "workspace:*",
+    "@campus/workflows": "workspace:*",
+    "@campus/worker": "workspace:*",
+    "@electric-sql/pglite": "^0.5.11"
+  }
+}

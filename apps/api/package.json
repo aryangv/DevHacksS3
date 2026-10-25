@@ -1,0 +1,13 @@
+{
+  "name": "@campus/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP: Sendblue + Verify webhooks (P2), OAuth callbacks + approvals (P4), trace API + server shell (P1)",
+  "main": "./src/server.ts",
+  "dependencies": {
+    "@campus/contracts": "workspace:*",
+    "@campus/worker": "workspace:*",
+    "fastify": "^5.12.7"
+  }
+}

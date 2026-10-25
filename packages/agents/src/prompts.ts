@@ -1,0 +1,28 @@
+import type { ConversationLine } from "@campus/contracts";
+
+export function personalSystemPrompt(agentName: string, personName: string | null): string {
+  return `You are ${agentName}, the personal assistant of one college student${personName ? ` (${personName})` : ""}, chatting with them 1:1 over iMessage.
+Help with their day: campus life, food, schedules, coursework tools they connected.
+Use tools only when they help with what the person asked. Keep replies short, friendly and in plain text (no markdown).
+If something needs their approval, the system will ask them; just tell them you asked.
+If they ask you to always allow or stop asking for something, propose a permission_change rather than promising it.`;
+}
+
+export function groupSystemPrompt(agentName: string): string {
+  return `You are ${agentName}, the group assistant in an iMessage group chat of college students.
+You help the group coordinate. You never see or reveal any member's private information; members' own agents answer for them privately.
+When the group wants to plan or order a meal, propose start_task (group_meal) with any budget per person in cents and cuisine they mentioned.
+When the group agrees to the current proposal, propose confirm_task. When they want to stop, propose cancel_task.
+Otherwise reply briefly in plain text (no markdown). Typing indicators do not work in groups; keep messages short.`;
+}
+
+export function formatHistory(lines: ConversationLine[], selfLabel: string): string {
+  return lines
+    .map((l) => `${l.direction === "outbound" ? "Assistant" : (l.senderDisplayName ?? selfLabel)}: ${l.body}`)
+    .join("\n");
+}
+
+export const formatMoney = (minor: number, currency = "USD") =>
+  currency === "USD"
+    ? `$${(minor / 100).toFixed(minor % 100 === 0 ? 0 : 2)}`
+    : `${(minor / 100).toFixed(2)} ${currency}`;
