@@ -127,20 +127,15 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
     ).toBe(true);
   });
 
-  it("without consent, personal agents answer needs_consent and the group is told who it's waiting on", async () => {
+  // Team decision (P2/P3): each student's own agent uses their memory by default — no consent step.
+  it("with no grants at all, each student's own agent still uses their memory (no prompts)", async () => {
     await studentsShareInDMs();
     const t = await sim.group(GROUP, AVERY.externalId, ALL_MEMBERS, "@agent dinner tonight? under $20 each");
     expect(t.outcomes[0]!.status).toBe("replied");
-    const responses = (
-      await sql.query<{ type: string; payload: Record<string, unknown> }>(
-        "SELECT type, payload FROM core.coordination_events WHERE type LIKE 'response.%'",
-      )
-    ).rows;
-    expect(responses.length).toBeGreaterThanOrEqual(3);
-    const pending = await consent().listPending(BLAKE.userId);
-    expect(pending).toHaveLength(1);
-    expect(pending[0]!.summary).toMatch(/your assistant/);
-    expect(pending[0]!.summary).not.toMatch(/vegetarian|\$15|1500/);
+    const proposal = t.sent.filter((m) => m.kind === "group").at(-1)!.text;
+    expect(proposal).toContain("Thai Basil");
+    expect(proposal).toContain("3 of 3");
+    for (const u of [AVERY, BLAKE, CASEY]) expect(await consent().listPending(u.userId)).toEqual([]);
   });
 
   it("18.9-3 on real memory: three students' private constraints → one proposal, projections only", async () => {
@@ -184,7 +179,7 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
     for (const r of raw) expect(r.audience_id).toBe(`personal:${r.subject_user_id}`);
   });
 
-  it("revoking consent takes effect on the very next request", async () => {
+  it("revoking an explicit grant to your own agent falls back to the default (still your agent only)", async () => {
     await studentsShareInDMs();
     for (const u of [AVERY, BLAKE, CASEY]) await consentToPrivateEvaluation(u.userId);
     const [tags] = (await consent().listGrants(BLAKE.userId)).filter((g) =>
@@ -192,14 +187,14 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
     );
     await consent().revoke(tags!.id, BLAKE.userId);
     const t = await sim.group(GROUP, AVERY.externalId, ALL_MEMBERS, "@agent dinner tonight? under $20 each");
-    expect(t.sent.filter((m) => m.kind === "group").at(-1)!.text).not.toContain("3 of 3");
+    expect(t.sent.filter((m) => m.kind === "group").at(-1)!.text).toContain("Thai Basil");
     const blake = (
-      await sql.query<{ decision: string; reason_code: string | null }>(
-        `SELECT decision, reason_code FROM core.context_decisions WHERE subject_user_id = $1 ORDER BY seq DESC LIMIT 1`,
+      await sql.query<{ decision: string; audience_id: string }>(
+        `SELECT decision, audience_id FROM core.context_decisions WHERE subject_user_id = $1 ORDER BY seq DESC LIMIT 1`,
         [BLAKE.userId],
       )
     ).rows[0]!;
-    expect(blake.decision).toBe("needs_consent");
+    expect(blake).toEqual({ decision: "approved", audience_id: `personal:${BLAKE.userId}` });
   });
 
   it("confirm → the decision is stored in the group's namespace, attributed, nothing private", async () => {

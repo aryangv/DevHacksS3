@@ -3,11 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "HTTP: Sendblue + Verify webhooks (P2), OAuth callbacks + approvals (P4), trace API + server shell (P1)",
+  "description": "HTTP: iMessage (BlueBubbles) webhook (P2), web pages mounted from @campus/web (P2), OAuth callbacks + approvals (P4), trace API + server shell (P1)",
   "main": "./src/server.ts",
   "dependencies": {
     "@campus/contracts": "workspace:*",
     "@campus/worker": "workspace:*",
-    "fastify": "^5.12.7"
+    "fastify": "^5.12.7",
+    "@campus/messaging": "workspace:*",
+    "@campus/web": "workspace:*"
   }
 }

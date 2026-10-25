@@ -23,7 +23,7 @@ SUPERMEMORY_API_KEY=...         # server only
 | Slot | Implementation | Notes |
 |---|---|---|
 | `memoryStore` | `DefaultMemoryStore` | `user_{uuid}` / `group_{uuid}` from the principal; no method takes a namespace. Writes use `dreaming: "instant"`; reads filter expired and pending-deletion items. |
-| `memoryPolicy` | `DefaultMemoryPolicy` | Unverified author → no; only the owner's own words in their namespace; groups keep `decision`s by current verified members; honours `memory_settings`; redacts secrets. |
+| `memoryPolicy` | `DefaultMemoryPolicy` | Unverified author → no; only the owner's own words in their namespace; groups keep `decision`s by current verified members; honours `memory_settings`; redacts secrets. (Group *chat* goes in separately, see `GroupChatIngestor`.) |
 | `broker` | `DefaultContextBroker` | Registry fields only. Raw fields (`meal.max_price_per_person_minor`, `meal.required_tags`, `meal.avoid_cuisines`) go **only** to the subject's own agent; `meal.price_band` / `availability.free_slots` to the task's group with consent. Values are derived from the subject's own memory by deterministic rules (or a seeded preference), validated by `CONTEXT_FIELDS`; unknown values are omitted. `disclose` gates `tool:<server>__<tool>` results before they reach a group. |
 | `consent` | `DefaultConsentService` | `getMemorySettings`, `hasActiveGrant` (standing grants). |
 | `buckets` | `DefaultBucketProvisioner` | Init doc → supportingContext → spec 5.6 buckets (never the built-in `preferences`); lazily on first write. |
@@ -31,14 +31,20 @@ SUPERMEMORY_API_KEY=...         # server only
 Beyond the interfaces (cast to the class, or use `createContextServices`):
 - consent page (P2): `consent.listPending / approve / decline / grant / revoke / listGrants / updateMemorySettings`
 - forget/delete (spec 5.8): `memoryStore.previewForget → applyForget`, `forgetMemory`, `deleteUserMemory`, `removeMemberContent`
-- worker jobs (P1): `memoryStore.processPendingCleanup()` every ~10 s, `memoryStore.purgeExpired()` hourly
+- worker jobs (P1 schedules them): `processPendingCleanup()` every ~10 s, `purgeExpired()` hourly,
+  `ingestGroupChat()` every ~60 s (`MEMORY_GROUP_INGEST_INTERVAL_MS`)
+- group chat memory (team decision, overrides spec 5.3 for groups): `GroupChatIngestor` batches every message
+  in a group the assistant is in — verified or not — into `group_{uuid}`, one appended document per speaker
+  (`chat_<conversation>_<speaker>`, `author_user_id` set for verified speakers). Secrets redacted, phone
+  numbers never written, verified members with memory off skipped. Tracked in `core.group_memory_ingested`.
 - trace view: `contextTrace(repo, taskId)` — decisions with stage and reason, never values
 
 ## Conventions P3 relies on (please review, P1/P2)
 
 - Grants: audience `agent` + `personal:<userId>` (own agent), `group` + `group:<conversationId>` or `group:*`
-  (any group the user is currently in). Self-reads by a personal agent need a grant (as in `fixtures/consent.ts`);
-  with none, the broker returns `needs_consent` and creates a consent request for P2's page.
+  (any group the user is currently in). Team decision: a personal agent reads its own user's memory by
+  default (no grant needed, no prompt); a grant to the own agent is still honoured, and an explicit decline
+  still denies. Anything for a group or another agent still needs a grant (`needs_consent` otherwise).
 - The factory receives no TaskStore/IdentityService, so `Directory` reads `core.agent_tasks`,
   `core.conversations` and `core.external_identities` (read-only) and uses `MembershipService.listActiveMembers`.
   If P1 adds those to `ContextModuleFactory` deps, swap the reads.

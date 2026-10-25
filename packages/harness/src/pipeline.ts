@@ -135,7 +135,9 @@ export class TurnPipelineImpl implements TurnPipeline {
       platform: msg.platform,
       providerMessageId: msg.providerMessageId,
       senderExternalIdentityId: identity.externalIdentityId,
-      body: verified ? msg.text : null, // never retain unverified senders' messages
+      // Unverified senders' 1:1 messages are never retained. Group chat text is kept for everyone: team
+      // decision (P2/P3) that everything said in a group the assistant is in feeds the group's memory.
+      body: verified || msg.isGroup ? msg.text : null,
       receivedAt: msg.timestamp,
     });
 

@@ -83,7 +83,7 @@ export class GroupAgentImpl implements GroupAgent {
       );
       if (recalled.length)
         dataBlocks.push({
-          label: "group memory: past decisions",
+          label: "group memory: past chat and decisions",
           content: recalled.map((m) => m.content).join("\n"),
         });
     } catch (err) {

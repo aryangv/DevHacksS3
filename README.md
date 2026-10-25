@@ -45,7 +45,7 @@ With `RUNTIME_STORE=memory` the API runs the worker in-process.
 | `packages/agents` | P1 | `PersonalAgent`, `GroupAgent`, in-process coordination bus, deterministic coordinator |
 | `apps/worker` | P1 | DI container + feature flags, worker process, chat simulator |
 | `apps/api` | P1 shell; P2 webhooks; P4 OAuth/approvals | HTTP server, trace API |
-| `packages/messaging`, `packages/identity`, `apps/web` | P2 | Sendblue adapter, Verify, auth gate, nudges, membership, web pages |
+| `packages/messaging`, `packages/identity`, `apps/web` | P2 | iMessage via BlueBubbles, sign-up by texted code, auth gate, nudges, membership, web pages ([setup](apps/web/README.md)) |
 | `packages/context`, `hackathon/cubbie-skill` | P3 | Supermemory v5, broker, consent, buckets, forgetting; Cubbie Skill |
 | `packages/tools`, `packages/approvals`, `packages/workflows` | P4 | Catalog, gateway, permissions, vault, OAuth, approvals; payments (stretch) |
 | `tests/integration` | P1 (others contribute by PR) | Shared acceptance tests (18.9) |
@@ -106,9 +106,14 @@ If a flag is on but the export is missing, startup fails with a clear `module_no
 
 ## Verified vs unverified (spec 3.3)
 
-Built behind interfaces because they are not yet confirmed: Sendblue plan/group access and the receive
-webhook's authentication (P2, Gate A); Supermemory v5 naming rules, profile filters and scoped keys (P3);
-Composio coverage (P4). Sendblue fixtures in `packages/contracts/src/fixtures/sendblue.ts` are
-illustrative until P2 replaces them with captured payloads.
+Built behind interfaces because they are not yet confirmed: Supermemory v5 naming rules, profile filters
+and scoped keys (P3); Composio coverage (P4).
+
+**Team decisions that differ from the spec:** iMessage goes through **BlueBubbles** (a Mac running
+BlueBubbles Server) instead of Sendblue, so sign-up uses a self-built "text this code to the bot" flow
+instead of Sendblue Verify (spec 16 open decision 3). BlueBubbles payload shapes were checked against its
+server source; BlueBubbles webhooks are unsigned, so the webhook URL carries a secret. A personal agent
+reads its own user's memory by default, and group chats feed the group's memory with everything said
+there (spec 5.3 kept for 1:1 chats only). `packages/contracts/src/fixtures/sendblue.ts` is now unused by P2.
 
 **Honesty rule:** sandbox/test transactions are always labelled as simulated, never as real orders.

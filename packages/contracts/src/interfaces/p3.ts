@@ -63,6 +63,11 @@ export interface MemoryMaintenance {
   processPendingCleanup(): Promise<{ removed: number; stillPending: number }>;
   /** Delete entries past their retention. Run hourly. */
   purgeExpired(): Promise<{ removed: number; pending: number }>;
+  /**
+   * Batch new group chat messages into each group's namespace (team decision: everything said in a
+   * group the assistant is in). Run about every 60 s. Optional: absent means no group chat memory.
+   */
+  ingestGroupChat?(): Promise<{ ingested: number; skipped: number; failed: number; documents: number }>;
 }
 
 /** spec 5.3: decides what is memory-worthy given consent settings; redacts. */

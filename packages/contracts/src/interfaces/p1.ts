@@ -68,7 +68,7 @@ export interface MessageLog {
     platform: InboundMessage["platform"];
     providerMessageId: string;
     senderExternalIdentityId: string | null;
-    /** null for unverified senders: their messages are never retained (spec 4.3). */
+    /** null for unverified senders in 1:1 chats (never retained, spec 4.3); group chat text is kept (team decision). */
     body: string | null;
     receivedAt: string;
   }): Promise<{ id: string; inserted: boolean }>;

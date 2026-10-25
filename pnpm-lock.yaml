@@ -41,6 +41,12 @@ importers:
       '@campus/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@campus/messaging':
+        specifier: workspace:*
+        version: link:../../packages/messaging
+      '@campus/web':
+        specifier: workspace:*
+        version: link:../web
       '@campus/worker':
         specifier: workspace:*
         version: link:../worker
@@ -48,7 +54,20 @@ importers:
         specifier: ^5.12.7
         version: 5.12.7
 
-  apps/web: {}
+  apps/web:
+    dependencies:
+      '@campus/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@campus/identity':
+        specifier: workspace:*
+        version: link:../../packages/identity
+      '@campus/worker':
+        specifier: workspace:*
+        version: link:../worker
+      fastify:
+        specifier: ^5.12.7
+        version: 5.12.7
 
   apps/worker:
     dependencies:
@@ -153,6 +172,10 @@ importers:
       '@campus/contracts':
         specifier: workspace:*
         version: link:../contracts
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.11
+        version: 0.5.11
 
   packages/messaging:
     dependencies:
@@ -177,6 +200,9 @@ importers:
       '@campus/agents':
         specifier: workspace:*
         version: link:../packages/agents
+      '@campus/api':
+        specifier: workspace:*
+        version: link:../apps/api
       '@campus/approvals':
         specifier: workspace:*
         version: link:../packages/approvals
@@ -201,6 +227,9 @@ importers:
       '@campus/tools':
         specifier: workspace:*
         version: link:../packages/tools
+      '@campus/web':
+        specifier: workspace:*
+        version: link:../apps/web
       '@campus/worker':
         specifier: workspace:*
         version: link:../apps/worker

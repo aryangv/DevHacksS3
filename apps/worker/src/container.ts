@@ -238,6 +238,7 @@ export async function buildContainer(
       maintenance = MaintenanceScheduler.forMemory(contextModule.maintenance, {
         cleanupEveryMs: config.MEMORY_CLEANUP_INTERVAL_MS,
         purgeEveryMs: config.MEMORY_PURGE_INTERVAL_MS,
+        groupIngestEveryMs: config.MEMORY_GROUP_INGEST_INTERVAL_MS,
         logger,
       });
     }
