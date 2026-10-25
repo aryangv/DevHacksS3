@@ -45,6 +45,27 @@ export function extractJson(text: string): unknown {
 
 export type StructuredResult<T> = { value: T; responses: ModelResponse[]; retried: boolean };
 
+/** Pause before re-sending after a temporary provider error (rate limit, overload). */
+export const TRANSIENT_RETRY_DELAY_MS = 3_000;
+
+/**
+ * One retry for temporary provider errors (HarnessError.retryable: 429s, 5xx, timeouts). A model
+ * call has no side effects, so re-sending is safe; anything else, or a second failure, is thrown.
+ */
+async function completeWithRetry(
+  client: ModelClient,
+  request: ModelRequest,
+  sleep: (ms: number) => Promise<void>,
+): Promise<ModelResponse> {
+  try {
+    return await client.complete(request);
+  } catch (err) {
+    if (!(err instanceof HarnessError) || !err.retryable) throw err;
+    await sleep(TRANSIENT_RETRY_DELAY_MS);
+    return client.complete(request);
+  }
+}
+
 export async function callStructured<T>(
   client: ModelClient,
   request: Omit<ModelRequest, "outputSchema">,
@@ -53,6 +74,8 @@ export async function callStructured<T>(
     schemaName: string;
     onInvalid?: (attempt: number, error: string) => void;
     extraValidate?: (value: T) => string | null;
+    /** Injected in tests. */
+    sleep?: (ms: number) => Promise<void>;
   },
 ): Promise<StructuredResult<T>> {
   const outputSchema = { name: opts.schemaName, schema: toModelJsonSchema(schema) };
@@ -60,7 +83,11 @@ export async function callStructured<T>(
   let messages: ModelMessage[] = request.messages;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const response = await client.complete({ ...request, messages, outputSchema });
+    const response = await completeWithRetry(
+      client,
+      { ...request, messages, outputSchema },
+      opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+    );
     responses.push(response);
     if (response.stopReason === "refusal") {
       throw new HarnessError("model_refused", "model declined the request", { details: { attempt } });

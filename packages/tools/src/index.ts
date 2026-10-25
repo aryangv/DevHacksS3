@@ -1,14 +1,20 @@
-// @campus/tools — owner: P4 (hands).
-//
-// Implements: ToolGateway, PermissionResolver, ToolProvider (custom MCP + Composio), VaultClient,
-// ConnectionService — see @campus/contracts interfaces/p4.ts and harness-spec Section 6.
-// Tables (P4-owned): mcp.*, vault.*. New columns → db/migrations/p4/.
-// The gateway receives TurnContext from the harness (ctx.userId is the verified principal; never use
-// a user id from tool args) and returns approval prompts for the harness to send.
-//
-// To plug into the pipeline, export:
-//   export const createToolsModule: ToolsModuleFactory = (deps) => ({ gateway, permissions, connections, vault })
-// then flip USE_REAL_TOOLS=true at integration point I2.
-//
-// Import rule: only @campus/contracts and files inside this package.
-export {};
+export { ToolCatalog } from './catalog.ts';
+export { ToolGateway } from './gateway.ts';
+export { PermissionResolver } from './permissions.ts';
+export { ConnectionService, HttpOAuthClient } from './connections.ts';
+export { CustomMcpProvider, ComposioProvider, createComposio } from './providers.ts';
+export { EnvelopeCipher, PostgresVaultClient } from './vault.ts';
+export { PostgresToolStore } from './postgres.ts';
+export { vaultCipherFromEnv, composioFromEnv } from './config.ts';
+export { connectionHandlers } from './http-handlers.ts';
+export { plannedIntegrations } from './integrations.ts';
+export {
+  readOnlyComposioIntegrations,
+  SEARCH_TOOLS,
+  GMAIL_TOOLS,
+  SEARCH_VERSION,
+  GMAIL_VERSION,
+  GMAIL_READ_SCOPE,
+} from './composio-readonly.ts';
+export type { GatewayResult } from './gateway.ts';
+export type * from './ports.ts';

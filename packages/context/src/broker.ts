@@ -280,6 +280,10 @@ export class DefaultContextBroker implements ContextBroker {
       const grant = readable.find((g) => grantCovers(g, target)) ?? null;
       if (grant) {
         plans.push({ info, grant });
+      } else if (target.kind === "self" && !declined(prior, name, wanted)) {
+        // Team decision: a user's own personal agent reads that user's memory by default (no grant).
+        // Disclosure to anyone else (groups, other agents) still needs a grant.
+        plans.push({ info, grant: null });
       } else if (declined(prior, name, wanted)) {
         return new Deny(readable.length ? "disclose" : "read", `consent_declined:${name}`);
       } else if (policy.promptable) {

@@ -46,7 +46,20 @@ export type CoordinationEvent = {
 // ---- group_meal task state (dinner slice) ----
 
 export type GroupMealStatus =
-  "collecting" | "proposed" | "decided" | "handed_off" | "no_consensus" | "cancelled" | "failed";
+  | "collecting"
+  | "proposed"
+  | "decided"
+  | "handed_off"
+  /** Real order quoted; waiting for the payer to approve the exact total. */
+  | "awaiting_payment"
+  /** Placed with the provider; tracking until delivered. */
+  | "ordered"
+  /** Provider outcome unknown (timeout/error after submit): check before any retry. */
+  | "needs_reconciliation"
+  | "completed"
+  | "no_consensus"
+  | "cancelled"
+  | "failed";
 
 export type GroupMealState = {
   params: { budgetPerPersonMinor: number | null; cuisine: string | null; notes: string | null };
@@ -61,7 +74,48 @@ export type GroupMealState = {
     tags: string[];
   }>;
   round: number;
-  proposal?: { optionId: string; acceptCount: number; respondents: number; waitingOn: string[] };
+  proposal?: {
+    optionId: string;
+    acceptCount: number;
+    respondents: number;
+    waitingOn: string[];
+    /** The proposal message we sent; a 👍 on exactly this message confirms. */
+    messageId?: string;
+  };
   decision?: { optionId: string; decidedByUserId: string; decidedAt: string };
   handoff?: { approvalId: string; payerUserId: string; sandbox: boolean };
+  /** Item-level group order built from each member's agent's picks (additive, P2 contribution). */
+  order?: {
+    restaurant: string;
+    currency: string;
+    lines: Array<{
+      userId: string;
+      name: string | null;
+      items: Array<{ itemId: string; name: string; quantity: number; priceMinor: number }>;
+      subtotalMinor: number;
+    }>;
+    /** Members whose agent picked nothing (no acceptable item, or no answer). */
+    notIncluded: string[];
+    totalMinor: number;
+    payerUserId: string;
+    /** Each non-payer owes the payer their share (their items + a proportional share of tax/fees). */
+    splits: Array<{ userId: string; name: string | null; owesMinor: number }>;
+    /** Real provider quote (exact amount the payer approves). Absent with test data. */
+    quote?: {
+      provider: string;
+      cartId: string;
+      totalMinor: number;
+      subtotalMinor: number;
+      taxMinor: number | null;
+      feesMinor: number | null;
+      tipMinor: number;
+    };
+    /** The gateway approval for submit_order (spend). */
+    approvalId?: string;
+    /** Where to post order updates (the original group). */
+    delivery?: { platform: string; providerConversationId: string };
+    providerOrderId?: string;
+    trackingStatus?: string;
+    placedAt?: string;
+  };
 };

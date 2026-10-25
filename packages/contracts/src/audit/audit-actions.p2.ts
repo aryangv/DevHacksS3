@@ -8,4 +8,10 @@ export const AUDIT_ACTIONS_P2 = [
   "membership.joined",
   "membership.left",
   "conversation.activated",
+  "verification.started",
+  "verification.rejected",
+  "verification.expired",
+  "webhook.rejected",
+  "session.created",
+  "session.revoked",
 ] as const;
