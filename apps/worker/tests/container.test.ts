@@ -17,16 +17,20 @@ describe("DI container + feature flags (spec 18.3 item 7)", () => {
   });
 
   it("fails fast when a flag is on but the owner's factory export does not exist yet", async () => {
+    // P2 contribution: messaging/identity now have real factories, so this uses P4's (not yet built).
     const env = {
       LOG_LEVEL: "error",
-      USE_REAL_MESSAGING: "true",
-      SENDBLUE_API_KEY_ID: "x",
-      SENDBLUE_API_SECRET: "y",
-      SENDBLUE_FROM_NUMBER: "+15550000000",
+      USE_REAL_TOOLS: "true",
+      DATABASE_URL_VAULT: "pglite://memory",
+      VAULT_KEY_ID: "test",
+      VAULT_MASTER_KEY: "test-only",
+      OAUTH_REDIRECT_BASE: "http://localhost:3000/oauth/callback",
+      APP_ORIGIN: "http://localhost:3000",
+      DATABASE_URL: "pglite://memory",
     };
     await expect(buildContainer({ env })).rejects.toBeInstanceOf(ModuleNotImplementedError);
     await expect(buildContainer({ env })).rejects.toThrow(
-      /@campus\/messaging does not export createMessagingAdapter/,
+      /@campus\/approvals does not export createApprovalsModule/,
     );
   });
 

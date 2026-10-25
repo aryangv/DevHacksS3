@@ -11,7 +11,10 @@ export type ProactiveRule = {
 export type RouteDecision =
   | { target: "personal"; addressed: true; reason: "dm" }
   | { target: "group"; addressed: true; reason: "mention" | "proactive_rule"; ruleId?: string; text: string }
-  | { target: "none"; addressed: false; reason: "not_addressed" | "empty" };
+  // A tapback in a group goes to the group agent (it may confirm a proposal). Not "addressed": an
+  // unverified person's reaction is blocked by the auth gate without a nudge.
+  | { target: "group"; addressed: false; reason: "reaction"; text: "" }
+  | { target: "none"; addressed: false; reason: "not_addressed" | "empty" | "reaction_dm" };
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -37,6 +40,11 @@ export function route(
   message: InboundMessage,
   opts: { invocationNames: string[]; proactiveRules?: ProactiveRule[] },
 ): RouteDecision {
+  if (message.reaction) {
+    return message.isGroup
+      ? { target: "group", addressed: false, reason: "reaction", text: "" }
+      : { target: "none", addressed: false, reason: "reaction_dm" };
+  }
   if (!message.text.trim()) return { target: "none", addressed: false, reason: "empty" };
   if (!message.isGroup) return { target: "personal", addressed: true, reason: "dm" };
   const inv = detectInvocation(message.text, opts.invocationNames);

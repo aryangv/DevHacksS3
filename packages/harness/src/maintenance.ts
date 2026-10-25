@@ -2,10 +2,11 @@ import type { Logger, MemoryMaintenance } from "@campus/contracts";
 
 // Periodic background jobs owned by other packages but scheduled by the worker process.
 // Memory (P3): retry deletions Supermemory refused while documents were processing (spec 5.8),
-// and enforce memory_settings.retention_days (spec 5.4). A job never overlaps with itself and
+// enforce memory_settings.retention_days (spec 5.4), and batch group chat into group memory (~60 s). A job never overlaps with itself and
 // a failure is logged, never thrown into the worker.
 
 type Job = { name: string; everyMs: number; run: () => Promise<unknown> };
+export type MaintenanceJob = Job;
 
 export class MaintenanceScheduler {
   private readonly timers: NodeJS.Timeout[] = [];
@@ -19,8 +20,16 @@ export class MaintenanceScheduler {
 
   static forMemory(
     maintenance: MemoryMaintenance,
-    opts: { cleanupEveryMs: number; purgeEveryMs: number; logger: Logger },
+    opts: {
+      cleanupEveryMs: number;
+      purgeEveryMs: number;
+      groupIngestEveryMs?: number;
+      /** Other periodic jobs to run on the same scheduler (e.g. order tracking). */
+      extraJobs?: Job[];
+      logger: Logger;
+    },
   ): MaintenanceScheduler {
+    const ingest = maintenance.ingestGroupChat?.bind(maintenance);
     return new MaintenanceScheduler(
       [
         {
@@ -29,6 +38,10 @@ export class MaintenanceScheduler {
           run: () => maintenance.processPendingCleanup(),
         },
         { name: "memory.purge_expired", everyMs: opts.purgeEveryMs, run: () => maintenance.purgeExpired() },
+        ...(ingest
+          ? [{ name: "memory.group_chat_ingest", everyMs: opts.groupIngestEveryMs ?? 60_000, run: ingest }]
+          : []),
+        ...(opts.extraJobs ?? []),
       ],
       opts.logger,
     );

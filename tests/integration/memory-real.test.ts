@@ -4,6 +4,7 @@
 // real implementations, plus consent, revocation and group memory.
 import type { DefaultConsentService, DefaultMemoryStore } from "@campus/context";
 import { FakeSupermemory, serveFakeSupermemory } from "@campus/context/testing";
+import type { GroupMealState } from "@campus/contracts";
 import { createPgliteClient, migrate } from "@campus/db";
 import { Simulator } from "@campus/worker";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -127,20 +128,15 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
     ).toBe(true);
   });
 
-  it("without consent, personal agents answer needs_consent and the group is told who it's waiting on", async () => {
+  // Team decision (P2/P3): each student's own agent uses their memory by default — no consent step.
+  it("with no grants at all, each student's own agent still uses their memory (no prompts)", async () => {
     await studentsShareInDMs();
     const t = await sim.group(GROUP, AVERY.externalId, ALL_MEMBERS, "@agent dinner tonight? under $20 each");
     expect(t.outcomes[0]!.status).toBe("replied");
-    const responses = (
-      await sql.query<{ type: string; payload: Record<string, unknown> }>(
-        "SELECT type, payload FROM core.coordination_events WHERE type LIKE 'response.%'",
-      )
-    ).rows;
-    expect(responses.length).toBeGreaterThanOrEqual(3);
-    const pending = await consent().listPending(BLAKE.userId);
-    expect(pending).toHaveLength(1);
-    expect(pending[0]!.summary).toMatch(/your assistant/);
-    expect(pending[0]!.summary).not.toMatch(/vegetarian|\$15|1500/);
+    const proposal = t.sent.filter((m) => m.kind === "group").at(-1)!.text;
+    expect(proposal).toContain("Thai Basil");
+    expect(proposal).toContain("3 of 3");
+    for (const u of [AVERY, BLAKE, CASEY]) expect(await consent().listPending(u.userId)).toEqual([]);
   });
 
   it("18.9-3 on real memory: three students' private constraints → one proposal, projections only", async () => {
@@ -184,7 +180,7 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
     for (const r of raw) expect(r.audience_id).toBe(`personal:${r.subject_user_id}`);
   });
 
-  it("revoking consent takes effect on the very next request", async () => {
+  it("revoking an explicit grant to your own agent falls back to the default (still your agent only)", async () => {
     await studentsShareInDMs();
     for (const u of [AVERY, BLAKE, CASEY]) await consentToPrivateEvaluation(u.userId);
     const [tags] = (await consent().listGrants(BLAKE.userId)).filter((g) =>
@@ -192,14 +188,14 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
     );
     await consent().revoke(tags!.id, BLAKE.userId);
     const t = await sim.group(GROUP, AVERY.externalId, ALL_MEMBERS, "@agent dinner tonight? under $20 each");
-    expect(t.sent.filter((m) => m.kind === "group").at(-1)!.text).not.toContain("3 of 3");
+    expect(t.sent.filter((m) => m.kind === "group").at(-1)!.text).toContain("Thai Basil");
     const blake = (
-      await sql.query<{ decision: string; reason_code: string | null }>(
-        `SELECT decision, reason_code FROM core.context_decisions WHERE subject_user_id = $1 ORDER BY seq DESC LIMIT 1`,
+      await sql.query<{ decision: string; audience_id: string }>(
+        `SELECT decision, audience_id FROM core.context_decisions WHERE subject_user_id = $1 ORDER BY seq DESC LIMIT 1`,
         [BLAKE.userId],
       )
     ).rows[0]!;
-    expect(blake.decision).toBe("needs_consent");
+    expect(blake).toEqual({ decision: "approved", audience_id: `personal:${BLAKE.userId}` });
   });
 
   it("confirm → the decision is stored in the group's namespace, attributed, nothing private", async () => {
@@ -219,6 +215,43 @@ describe("real P3 memory in P1's pipeline (USE_REAL_MEMORY=true)", () => {
       true,
     );
     expect(JSON.stringify(groupDocs)).not.toMatch(/vegetarian|mexican|\$15|\$18/i);
+  });
+
+  // P2 contribution: item-level group order on real memory, no consent setup (default self-access).
+  it("group order: each agent picks within its owner's private rules; split posted; nothing private shown", async () => {
+    await studentsShareInDMs(); // Avery $20 eats anything; Blake vegetarian ≤ $15; Casey no mexican ≤ $18
+    await sim.group(GROUP, AVERY.externalId, ALL_MEMBERS, "@agent dinner tonight? under $20 each");
+    const t = await sim.group(GROUP, CASEY.externalId, ALL_MEMBERS, "@agent confirm");
+    const groupText = t.sent.filter((m) => m.kind === "group").at(-1)!.text;
+    expect(groupText).toMatch(
+      /^Locked in: Thai Basil\. Group order \(test order - nothing real is ordered\):/,
+    );
+
+    const task = (
+      await sql.query<{
+        state_json: { order: NonNullable<GroupMealState["order"]> };
+      }>("SELECT state_json FROM core.agent_tasks WHERE type = 'group_meal'")
+    ).rows[0]!.state_json.order;
+    const { sampleMenus } = await import("@campus/contracts/fixtures");
+    const menu = new Map(sampleMenus.opt_thai_basil!.map((i) => [i.id, i]));
+    const line = (userId: string) => task.lines.find((l) => l.userId === userId)!;
+    expect(task.lines).toHaveLength(3);
+    // Blake: vegetarian and ≤ $15 — only from his own memory, never told to the group.
+    expect(
+      line(BLAKE.userId).items.every((i) => menu.get(i.itemId)!.tags.includes("vegetarian_friendly")),
+    ).toBe(true);
+    expect(line(BLAKE.userId).subtotalMinor).toBeLessThanOrEqual(1500);
+    expect(line(CASEY.userId).subtotalMinor).toBeLessThanOrEqual(1800);
+    expect(task.totalMinor).toBe(task.lines.reduce((n, l) => n + l.subtotalMinor, 0));
+    expect(task.payerUserId).toBe(CASEY.userId);
+    expect(task.splits.map((x) => x.userId).sort()).toEqual([AVERY.userId, BLAKE.userId].sort());
+    expect(groupText).toContain("Casey is paying");
+    // Private caps ($15 / $18 exactly) never appear; menu prices like $15.50 may.
+    expect(groupText).not.toMatch(/vegetarian|mexican|\$15(?![.\d])|\$18(?![.\d])|budget/i);
+    // The payer alone gets the payment link, with the exact total.
+    const dm = t.sent.find((m) => m.kind === "dm")!;
+    expect(dm.to).toBe(CASEY.externalId);
+    expect(dm.text).toContain(`$${(task.totalMinor / 100).toFixed(2)}`);
   });
 
   it("18.9-4 on real memory: a search in A's space never returns B's memories, even for adversarial queries", async () => {

@@ -2,6 +2,17 @@
   "name": "@campus/web",
   "version": "0.0.0",
   "private": true,
-  "description": "Onboarding, connections, consent settings, approval page UI (owner: P2). Skeleton only — P2 picks the framework (ARCHITECTURE suggests Next.js).",
-  "dependencies": {}
+  "type": "module",
+  "description": "Onboarding (iMessage code verification), memory, connections, consent settings and approval page UI (owner: P2). Server-rendered pages mounted on the API server.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@campus/contracts": "workspace:*",
+    "@campus/identity": "workspace:*",
+    "@campus/worker": "workspace:*",
+    "fastify": "^5.12.7"
+  }
 }

@@ -6,16 +6,19 @@
   "description": "Shared cross-package acceptance tests (spec 18.9; owner: P1, others contribute via PR)",
   "dependencies": {
     "@campus/agents": "workspace:*",
+    "@campus/api": "workspace:*",
     "@campus/approvals": "workspace:*",
     "@campus/context": "workspace:*",
     "@campus/contracts": "workspace:*",
     "@campus/db": "workspace:*",
+    "@campus/grubhub": "workspace:*",
     "@campus/harness": "workspace:*",
     "@campus/identity": "workspace:*",
     "@campus/messaging": "workspace:*",
     "@campus/tools": "workspace:*",
-    "@campus/workflows": "workspace:*",
+    "@campus/web": "workspace:*",
     "@campus/worker": "workspace:*",
+    "@campus/workflows": "workspace:*",
     "@electric-sql/pglite": "^0.5.11"
   }
 }

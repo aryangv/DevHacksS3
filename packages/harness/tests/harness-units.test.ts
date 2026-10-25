@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ModelOutputInvalidError, fixedClock, silentLogger } from "@campus/contracts";
+import { HarnessError, ModelOutputInvalidError, fixedClock, silentLogger } from "@campus/contracts";
 import { FakeModelClient } from "@campus/contracts/fakes";
 import { ModelStepOutputSchema } from "@campus/contracts";
 import { describe, expect, it } from "vitest";
@@ -108,6 +108,42 @@ describe("structured output with a single retry (spec 4.4)", () => {
       callStructured(model, req, ModelStepOutputSchema, { schemaName: "x" }),
     ).rejects.toBeInstanceOf(ModelOutputInvalidError);
     expect(model.requests).toHaveLength(2);
+  });
+
+  // P2 contribution (found on Gemini's free tier): a temporary provider error is retried once.
+  it("retries a temporary provider error once (rate limit / overload), then gives up", async () => {
+    const slept: number[] = [];
+    const sleep = async (ms: number) => {
+      slept.push(ms);
+    };
+    const limited = () => new HarnessError("rate_limited", "429", { retryable: true });
+    const ok = { proposals: [{ kind: "reply", text: "ok" }] };
+
+    const once = FakeModelClient.scripted([limited(), ok]);
+    expect(
+      (await callStructured(once, req, ModelStepOutputSchema, { schemaName: "x", sleep })).value,
+    ).toEqual(ok);
+    expect(once.requests).toHaveLength(2);
+    expect(slept).toEqual([3000]);
+
+    const twice = FakeModelClient.scripted([limited(), limited(), ok]);
+    await expect(
+      callStructured(twice, req, ModelStepOutputSchema, { schemaName: "x", sleep }),
+    ).rejects.toMatchObject({
+      code: "rate_limited",
+    });
+    expect(twice.requests).toHaveLength(2);
+
+    const fatal = FakeModelClient.scripted([
+      new HarnessError("model_unavailable", "400", { retryable: false }),
+      ok,
+    ]);
+    await expect(
+      callStructured(fatal, req, ModelStepOutputSchema, { schemaName: "x", sleep }),
+    ).rejects.toMatchObject({
+      code: "model_unavailable",
+    });
+    expect(fatal.requests).toHaveLength(1);
   });
 
   it("produces a provider JSON schema without $schema and with anyOf unions", () => {

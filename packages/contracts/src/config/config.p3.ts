@@ -13,6 +13,8 @@ const schema = z.object({
   MEMORY_CLEANUP_INTERVAL_MS: int(10_000),
   /** Worker: enforce memory_settings.retention_days. */
   MEMORY_PURGE_INTERVAL_MS: int(60 * 60 * 1000),
+  /** Worker: batch new group chat messages into each group's Supermemory namespace. 0 = off. */
+  MEMORY_GROUP_INGEST_INTERVAL_MS: int(60_000),
 });
 
 export const configSectionP3: ConfigSection<typeof schema> = {

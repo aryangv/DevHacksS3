@@ -3,7 +3,7 @@ import { iso } from "../client";
 
 /**
  * core.messages. Inbound rows carry the sender identity; outbound (agent) rows have a NULL sender.
- * Bodies of unverified senders are stored as NULL (never retained).
+ * Bodies of unverified senders are stored as NULL in 1:1 chats; group chat text is kept (team decision).
  */
 export class PgMessageLog implements MessageLog {
   constructor(private readonly sql: SqlClient) {}

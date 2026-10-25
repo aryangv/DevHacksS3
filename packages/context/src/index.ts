@@ -17,6 +17,7 @@ import { DefaultContextBroker } from "./broker";
 import { DefaultConsentService } from "./consent";
 import { Directory } from "./directory";
 import { DefaultMemoryPolicy } from "./memory-policy";
+import { GroupChatIngestor } from "./group-chat";
 import { DefaultMemoryStore } from "./memory-store";
 import { ContextRepo } from "./repo";
 import { Supermemory } from "./supermemory/keys";
@@ -34,6 +35,7 @@ export { DefaultConsentService } from "./consent";
 export { Directory } from "./directory";
 export { CLASS_POLICIES, classify, priceBandFor } from "./fields";
 export { DefaultMemoryPolicy, redactSecrets } from "./memory-policy";
+export { GroupChatIngestor, type GroupChatIngestResult } from "./group-chat";
 export { DefaultMemoryStore, namespaceFor } from "./memory-store";
 export { formatUntrusted } from "./read-path";
 export { ContextRepo } from "./repo";
@@ -70,6 +72,7 @@ export async function createContextServices(
   const directory = new Directory(sql, deps.membership);
   const provisioner = new DefaultBucketProvisioner({ supermemory, repo, audit, clock });
   const consent = new DefaultConsentService({ repo, directory, provisioner, audit, clock });
+  const memoryStore = new DefaultMemoryStore({ supermemory, repo, provisioner, audit, clock });
   return {
     supermemory,
     repo,
@@ -77,7 +80,8 @@ export async function createContextServices(
     provisioner,
     consent,
     memoryPolicy: new DefaultMemoryPolicy({ consent, directory, clock }),
-    memoryStore: new DefaultMemoryStore({ supermemory, repo, provisioner, audit, clock }),
+    memoryStore,
+    groupChat: new GroupChatIngestor({ sql, memoryStore, audit, clock, logger: deps.logger }),
     broker: new DefaultContextBroker({ repo, supermemory, directory, audit, clock }),
     trace: (taskId: string) => contextTrace(repo, taskId),
     /** Revoke this process's scoped Supermemory keys (call on shutdown). */
@@ -96,6 +100,10 @@ export const createContextModule: ContextModuleFactory = async (deps): Promise<C
     consent: s.consent,
     buckets: s.provisioner,
     memoryPolicy: s.memoryPolicy,
-    maintenance: s.memoryStore,
+    maintenance: {
+      processPendingCleanup: () => s.memoryStore.processPendingCleanup(),
+      purgeExpired: () => s.memoryStore.purgeExpired(),
+      ingestGroupChat: () => s.groupChat.ingestGroupChat(),
+    },
   };
 };

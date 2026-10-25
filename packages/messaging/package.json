@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "MessagingAdapter + Sendblue adapter (owner: P2)",
+  "description": "MessagingAdapter for iMessage via BlueBubbles (owner: P2)",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {

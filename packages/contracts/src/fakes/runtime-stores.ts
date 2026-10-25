@@ -66,6 +66,16 @@ export class InMemoryTaskStore implements TaskStore {
     return t ? (structuredClone(t) as AgentTask<S>) : null;
   }
 
+  async listByStatus<S extends Record<string, unknown>>(
+    type: string,
+    statuses: string[],
+  ): Promise<Array<AgentTask<S>>> {
+    return [...this.tasks.values()]
+      .filter((t) => t.type === type && statuses.includes(t.status))
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
+      .map((t) => structuredClone(t) as AgentTask<S>);
+  }
+
   async findActive<S extends Record<string, unknown>>(
     conversationId: string,
     type: string,

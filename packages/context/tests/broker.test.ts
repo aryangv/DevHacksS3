@@ -46,12 +46,12 @@ const grantSelf = (userId: string, ttlMs = HOUR) =>
     audience: { kind: "agent", id: personalAgentId(userId) },
     ttlMs,
   });
-const grantBand = (userId: string, audienceId = `group:${s.group}`) =>
+const grantBand = (userId: string, audienceId = `group:${s.group}`, ttlMs = HOUR) =>
   s.consent.grant(userId, {
     purpose: "group_meal",
     fields: ["meal.price_band"],
     audience: { kind: "group", id: audienceId },
-    ttlMs: HOUR,
+    ttlMs,
   });
 
 describe("projections from the subject's own memory (P1 registry)", () => {
@@ -99,33 +99,40 @@ describe("projections from the subject's own memory (P1 registry)", () => {
 });
 
 describe("consent states (§14)", () => {
-  it("needs consent, dedupes the prompt, then approves once granted", async () => {
-    const first = await s.broker.requestContext(selfAsk(s.alice));
+  // Team decision: a user's own personal agent reads that user's memory by default (no grant, no
+  // prompt). Anything that leaves for the group or another agent still needs consent.
+  it("the subject's own agent reads their memory by default — no grant, no prompt", async () => {
+    const r = await s.broker.requestContext(selfAsk(s.alice));
+    expect(r.status).toBe("approved");
+    expect(await s.consent.listPending(s.alice)).toEqual([]);
+  });
+
+  it("sharing with the group needs consent, dedupes the prompt, then approves once granted", async () => {
+    const first = await s.broker.requestContext(groupAsk(s.alice));
     expect(first.status).toBe("needs_consent");
-    expect(await s.broker.requestContext(selfAsk(s.alice))).toEqual(first);
+    expect(await s.broker.requestContext(groupAsk(s.alice))).toEqual(first);
     const [pending] = await s.consent.listPending(s.alice);
-    expect(pending!.summary).toMatch(/^Let your assistant use your exact per-meal budget/);
     await s.consent.approve(pending!.id, s.alice);
-    expect((await s.broker.requestContext(selfAsk(s.alice))).status).toBe("approved");
+    expect((await s.broker.requestContext(groupAsk(s.alice))).status).toBe("approved");
   });
 
   it("a decline is remembered — no nagging", async () => {
-    await s.broker.requestContext(selfAsk(s.alice));
+    await s.broker.requestContext(groupAsk(s.alice));
     await s.consent.decline((await s.consent.listPending(s.alice))[0]!.id, s.alice);
-    expect(await s.broker.requestContext(selfAsk(s.alice))).toEqual({
+    expect(await s.broker.requestContext(groupAsk(s.alice))).toEqual({
       status: "denied",
-      reasonCode: "consent_declined:meal.max_price_per_person_minor",
+      reasonCode: "consent_declined:meal.price_band",
     });
   });
 
   it("expired and revoked grants stop working immediately", async () => {
-    await grantSelf(s.alice, 60_000);
-    expect((await s.broker.requestContext(selfAsk(s.alice))).status).toBe("approved");
+    await grantBand(s.alice, `group:${s.group}`, 60_000);
+    expect((await s.broker.requestContext(groupAsk(s.alice))).status).toBe("approved");
     s.clock.advance(61_000);
-    expect((await s.broker.requestContext(selfAsk(s.alice))).status).toBe("needs_consent");
-    const grants = await grantSelf(s.alice);
+    expect((await s.broker.requestContext(groupAsk(s.alice))).status).toBe("needs_consent");
+    const grants = await grantBand(s.alice);
     for (const g of grants) await s.consent.revoke(g.id, s.alice);
-    expect((await s.broker.requestContext(selfAsk(s.alice))).status).toBe("needs_consent");
+    expect((await s.broker.requestContext(groupAsk(s.alice))).status).toBe("needs_consent");
   });
 
   it("a `group:*` standing grant covers the user's other groups only while they are a member", async () => {
@@ -164,11 +171,11 @@ describe("registry rules: raw fields never leave the subject's own agent", () =>
     expect(await s.consent.listPending(s.alice)).toEqual([]);
   });
 
-  it("a grant to the subject's own agent does not cover the group, and vice versa", async () => {
+  it("default self-access (or a grant to the subject's own agent) never covers the group", async () => {
+    expect((await s.broker.requestContext(selfAsk(s.alice))).status).toBe("approved");
+    expect((await s.broker.requestContext(groupAsk(s.alice))).status).toBe("needs_consent");
     await grantSelf(s.alice);
     expect((await s.broker.requestContext(groupAsk(s.alice))).status).toBe("needs_consent");
-    await grantBand(s.bob);
-    expect((await s.broker.requestContext(selfAsk(s.bob, ["meal.price_band"]))).status).toBe("needs_consent");
   });
 
   it("rejects raw-field grants to anyone but the user's own agent", async () => {
@@ -288,9 +295,8 @@ describe("isolation (§18.9-4) and trace (§12)", () => {
   });
 
   it("records every decision with its stage and reason — never values", async () => {
-    await s.broker.requestContext(selfAsk(s.alice));
+    await s.broker.requestContext(groupAsk(s.alice));
     await s.broker.requestContext(groupAsk(s.alice, ["meal.required_tags"]));
-    await grantSelf(s.alice);
     await s.broker.requestContext(selfAsk(s.alice));
     const trace = await s.trace(s.task);
     expect(trace.map((t) => [t.decision, t.stage, t.reasonCode])).toEqual([

@@ -68,7 +68,7 @@ export interface MessageLog {
     platform: InboundMessage["platform"];
     providerMessageId: string;
     senderExternalIdentityId: string | null;
-    /** null for unverified senders: their messages are never retained (spec 4.3). */
+    /** null for unverified senders in 1:1 chats (never retained, spec 4.3); group chat text is kept (team decision). */
     body: string | null;
     receivedAt: string;
   }): Promise<{ id: string; inserted: boolean }>;
@@ -86,6 +86,11 @@ export interface TaskStore {
   create<S extends Record<string, unknown>>(task: NewTask<S>): Promise<AgentTask<S>>;
   get<S extends Record<string, unknown>>(taskId: string): Promise<AgentTask<S> | null>;
   /** Most recent non-terminal task of `type` in a conversation. */
+  /** Tasks of `type` currently in one of `statuses` (e.g. orders waiting on payment or delivery). */
+  listByStatus<S extends Record<string, unknown>>(
+    type: string,
+    statuses: string[],
+  ): Promise<Array<AgentTask<S>>>;
   findActive<S extends Record<string, unknown>>(
     conversationId: string,
     type: string,
@@ -145,8 +150,11 @@ export interface CoordinationBus {
 
 /** Outbound side channel the harness gives an agent for the current turn. Plain text only. */
 export interface TurnIO {
-  /** Send immediately to the current conversation (e.g. a short "on it" in groups, spec 4.5). */
-  reply(text: string): Promise<void>;
+  /**
+   * Send immediately to the current conversation (e.g. a short "on it" in groups, spec 4.5).
+   * Returns the provider message id (so a later tapback on it can be matched), or null if nothing was sent.
+   */
+  reply(text: string): Promise<{ messageId: string } | null>;
   /** Send to a verified user's 1:1 chat (approval prompts, payer links). Returns false if not possible. */
   dmUser(userId: string, text: string): Promise<boolean>;
 }
@@ -156,6 +164,8 @@ export type AgentTurnInput = {
   senderDisplayName: string | null;
   /** Recent conversation lines (verified senders only). Untrusted data. */
   history: ConversationLine[];
+  /** Present when the turn is a tapback (e.g. a 👍 on the bot's proposal). `text` is then empty. */
+  reaction?: InboundMessage["reaction"];
 };
 
 export type AgentTurnResult = {

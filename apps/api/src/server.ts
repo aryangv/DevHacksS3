@@ -1,3 +1,4 @@
+import { registerWebRoutes } from "@campus/web";
 import type { Container } from "@campus/worker";
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerApprovalRoutes } from "./routes/approvals";
@@ -7,7 +8,8 @@ import { registerTraceRoutes } from "./routes/trace";
 import { registerWebhookRoutes } from "./routes/webhooks";
 
 // HTTP shell (P1). Route modules are owned per CODEOWNERS:
-//   routes/webhooks.ts  → P2 (Sendblue receive + Verify webhooks)
+//   routes/webhooks.ts  → P2 (iMessage webhook via BlueBubbles)
+//   @campus/web         → P2 (onboarding, account, memory, connections, settings, approval pages)
 //   routes/oauth.ts     → P4 (OAuth callbacks /oauth/callback/:slug)
 //   routes/approvals.ts → P4 (approval API used by the web approval page)
 //   routes/trace.ts, routes/health.ts → P1
@@ -48,5 +50,6 @@ export async function buildServer(c: Container): Promise<FastifyInstance> {
   await registerWebhookRoutes(app, c);
   await registerOAuthRoutes(app, c);
   await registerApprovalRoutes(app, c);
+  await registerWebRoutes(app, c);
   return app;
 }

@@ -14,4 +14,5 @@ export const AUDIT_ACTIONS_P3 = [
   "memory.provisioned",
   "memory.deleted_user",
   "memory.member_content_removed",
+  "memory.group_chat_ingested",
 ] as const;
