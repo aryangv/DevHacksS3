@@ -1,119 +1,276 @@
-# DevHacksS3 — Campus Agent Network
+<div align="center">
 
-A student coordination assistant in iMessage: personal agents per student, a group agent per group chat,
-private agent-to-agent coordination, and verified actions. Design: [ARCHITECTURE.md](ARCHITECTURE.md);
-build spec: [harness-spec.md](harness-spec.md) (the source of truth for this repo).
+# 🎓 SYNQ
 
-This repo is a TypeScript modular monolith (pnpm workspaces). **P1 (Spine)** has landed the scaffold:
-contracts, database, interfaces, in-memory fakes, the deterministic turn pipeline, agents, the
-coordinator, a real Claude-backed `ModelClient`, a trace API and a chat simulator. P2–P4 build real
-implementations of the interfaces and swap them in behind feature flags.
+### Your group chat has 14 opinions, 3 dietary restrictions and 0 decisions.<br>We gave it a brain. And a conscience. And a spending cap.
 
-## Quick start
+**AI agents that live in your iMessage threads, quietly coordinate behind the scenes,<br>and actually get the group fed.**
 
-Requires Node ≥ 22.12 and pnpm 9 (`npx pnpm@9.12.3 …` works if pnpm isn't installed).
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
+![Node](https://img.shields.io/badge/Node-%E2%89%A522.12-339933?logo=node.js&logoColor=white)
+![iMessage](https://img.shields.io/badge/lives%20in-iMessage-34C759?logo=apple&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-300%20passing-brightgreen)
+![Built at](https://img.shields.io/badge/built%20at-DevHacks%20S3-ff69b4)
+
+</div>
+
+---
+
+## 🍕 The problem
+
+Every group chat, every Friday, around 7pm:
+
+```
+Avery:   where do we want to eat
+Blake:   idk whatever's fine
+Devon:   i'm down for anything
+Casey:   not pizza
+Blake:   ok so pizza?
+Avery:   ...
+         [47 messages later]
+Devon:   i just made cereal
+```
+
+Somebody's secretly vegetarian. Somebody's broke but won't say it. Somebody "doesn't care" but very much
+cares. Nobody wants to be the one fronting $60 and chasing Venmo requests for a week.
+
+## ✨ The fix
+
+**Every student gets a personal agent. Every group chat gets a group agent. They talk to each other so you
+don't have to.**
+
+```
+Blake:   @agent dinner tonight? under $20 each
+Agent:   Checked with everyone's agents 🤝
+         Taco Bell (delivers in ~25 min) works for all 4 of you.
+         ~$13 per person. 👍 this message to lock it in.
+Avery:   👍
+Agent:   Locked in. Picked items each of you will actually eat.
+         Real total from Grubhub: $52.18 (tax, fees and tip included).
+         Devon, you're paying, so I've sent you a private link to approve the exact amount.
+         ...
+Agent:   🌯 Order's on the way! Blake, Casey, Avery: you each owe Devon $13.05.
+```
+
+Notice what *didn't* happen: nobody announced Casey is vegetarian. Nobody said Avery's budget is $12. The
+agents worked it out privately, and the group only saw the result.
+
+## 🧠 How it works
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🙋 Personal agent (your 1:1 chat)
+Tell it once: *"I'm vegetarian, I hate cilantro, keep me under $15."*
+It remembers (via [Supermemory](https://supermemory.ai)) and speaks up **for you** when the group plans.
+It keeps your secrets and hands over only what's needed.
+
+</td>
+<td width="50%" valign="top">
+
+### 👥 Group agent (your group chat)
+Only talks when you **@mention** it, so it's not *that* friend.
+It asks each member's personal agent *"does this work for you?"* and gets back a yes/no plus item picks.
+Your diary stays with your agent.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🤝 Agent-to-agent, internally
+Coordination happens on a private internal bus. Your private facts go into the decision and stay out of
+the group thread, which only sees the result.
+
+</td>
+<td valign="top">
+
+### 💸 Money with adult supervision
+👍 confirms the **plan**. Only the payer can approve the **payment**, on a private page showing the
+exact items, tax, fees and total. Money never moves because someone typed "yes lol".
+
+</td>
+</tr>
+</table>
+
+```
+ iMessage ──► BlueBubbles ──► webhook ──► dedupe + queue ──► worker
+                                                               │
+                         identity + auth gate (unverified? no model, no memory)
+                                                               │
+                              ┌────────────────────────────────┴────────────┐
+                        Personal agent                                Group agent
+                              └──────────► internal coordination bus ◄──────┘
+                                                               │
+                              context broker (consent-checked memory)
+                                                               │
+                          tool gateway ──► approvals ──► Grubhub / Gmail / …
+                                                               │
+                                              reply in the original chat
+```
+
+## 🧰 Everything else it does
+
+The dinner flow gets the spotlight, but a lot more is built underneath.
+
+**📱 Signing up without passwords.** Text a 6-character code to the bot from your own number, and that's
+it, you're verified. No app to install and no password to forget.
+
+**🗂️ A dashboard for your agent** (`/me`):
+- **Memory proof** (`/me/memory`): see exactly what your agent remembers about you. No mystery.
+- **Settings** (`/me/settings`): turn memory off, set a retention period (e.g. forget after 30 days),
+  approve or decline requests to share your info, and revoke any grant you've given.
+- **Connections** (`/me/connections`): see which accounts your agent can use.
+- **The nuclear option:** revoke your account and delete your memory in one click.
+
+**🧠 Memory that behaves.**
+- Your personal agent reads your own memory by default. Anything shared with a group or another agent
+  needs your consent.
+- The group agent remembers the group's own history. What's said in the group chat feeds group memory,
+  batched about once a minute.
+- Card numbers, codes and credentials are **redacted before anything is stored**. Your agent can't leak a
+  secret it never kept.
+- Background jobs enforce retention, so expired memories really do get deleted.
+
+**✅ Two ways to approve.** Tap the link, or reply `YES 4821` in your 1:1 chat. Approval codes only work in
+your own DM, never in the group.
+
+**🔍 Receipts for everything.** Each turn is audited, and a trace API shows exactly what happened: what
+was routed where, what the model proposed and which tools ran. Handy for debugging, and for proving the
+bot didn't go rogue.
+
+**🚦 Guardrails on cost too.** Per-turn budgets and rate limits keep a chatty group from burning through
+the model bill, and a temporary model error gets one automatic retry.
+
+**🔌 More connectors on deck.** A tool catalog with an encrypted credential vault, OAuth and per-tool
+permissions is merged, with Gmail and Google Calendar (via Composio) and GitHub ready to plug in.
+
+**🤖 Bring your own brain.** Runs on Claude or Gemini. Swap with one env var.
+
+**🧪 Fakes all the way down.** Every module has an in-memory fake behind a feature flag, so the whole
+system runs on a laptop with no Mac, no database and no API keys (`pnpm sim demo`).
+
+## 🔒 The paranoid parts (we're proud of these)
+
+The model is clever. We still don't trust it with anything important.
+
+- **The LLM never picks who.** It can't choose the user, the conversation, the memory namespace, the
+  credentials or the recipients. Those come from the pipeline, not from the prompt.
+- **Strict JSON or bust.** Agent proposals are schema-validated. If the model sneaks in an extra
+  `userId` field, the whole output is rejected.
+- **No prompt-injected permission grants.** Permission changes count only when they come from your own
+  DM, in your own words, before any tool output has been seen.
+- **Spend tools are on a leash.** Approval is required, it's bound to the exact provider total (if the
+  price changes, the order is refused), and there's a hard spending cap.
+- **Default deny.** Unverified senders get a polite sign-up nudge, with no model call and no memory.
+- **The vault is walled off.** The app's database role literally cannot read `vault.*`.
+- **Idempotent everything.** Retries don't double-order your burritos.
+- **Honesty rule.** Simulated or test transactions are always labelled as simulated. The bot only says
+  "ordered" once the provider hands back a real order ID.
+
+## 📊 Status: the honest version
+
+It's a hackathon project, so here's exactly where things stand:
+
+| Thing | Status |
+|---|---|
+| Turn pipeline, personal + group agents, coordination bus | ✅ Working, heavily tested |
+| Memory with consent + forgetting (Supermemory v5) | ✅ Working |
+| iMessage via BlueBubbles, sign-up by texted code, 👍 tapback confirms | ✅ Built · 🧪 tested in our web iMessage simulator; real-Mac run pending |
+| Grubhub: search, menus, **real priced carts** with tax/fees/tip | ✅ Verified live |
+| Grubhub: actually placing the order | ⛔ **Fails closed.** Checkout isn't verified yet, so nothing is charged and the group is told so |
+| Payer approval page, delivery tracking, split reminders | ✅ Built |
+| Web dashboard: memory proof, settings, consent grants, revoke | ✅ Built |
+| Tool catalog, vault, OAuth, Composio (Gmail, Google Calendar), GitHub | 🔌 Merged, not yet wired into the pipeline |
+
+> **About Grubhub:** this uses the unofficial [`grubhub-mcp`](https://github.com/aserper/grubhub-mcp)
+> server, which talks to Grubhub's private app API. It is **not** an official integration and may break
+> (or get an account blocked) at any time. Use a throwaway demo account. The order pipeline is
+> provider-agnostic, so an official provider (hi, DoorDash 👋) can plug in by implementing three tools.
+
+## 🚀 Quick start
+
+You need Node ≥ 22.12 and pnpm 9 (`npx pnpm@9.12.3 …` works if pnpm isn't installed).
 
 ```bash
 pnpm install
-pnpm sim demo        # dinner vertical slice end to end on fakes, with audit trace
-pnpm sim repl        # interactive: "dm avery hi", "group blake @agent dinner under $20", "verify devon"
-pnpm check           # lint + format check + typecheck + all tests
+pnpm sim demo     # the whole dinner flow end to end, on fakes, with an audit trace
+pnpm sim repl     # play god: "dm avery hi", "group blake @agent dinner under $20", "verify devon"
+pnpm check        # lint + format + typecheck + all the tests
 ```
 
-To use a real model, copy `.env.example` → `.env` (gitignored; all `pnpm` run scripts load it) and set
-`USE_REAL_MODEL=true`, `MODEL_PROVIDER=gemini` (or `anthropic`) and `MODEL_API_KEY=…`.
+**Use a real model:** copy `.env.example` → `.env`, then set `USE_REAL_MODEL=true`,
+`MODEL_PROVIDER=anthropic` (or `gemini`) and `MODEL_API_KEY=…`.
 
-No Docker? Use Postgres-in-WASM: `DATABASE_URL=pglite://./.data/pglite pnpm db:migrate`.
-With Docker: copy `.env.example` → `.env`, set the local passwords, then `docker compose up -d && pnpm db:migrate`.
-
-Run services:
+**Database:** no Docker? Run Postgres in WASM:
 
 ```bash
-pnpm dev:api         # Fastify: /healthz, /trace/*, webhook/OAuth/approval route slots (P2/P4)
-pnpm dev:worker      # queue worker (needs RUNTIME_STORE=postgres to share a queue with the API)
+DATABASE_URL=pglite://./.data/pglite pnpm db:migrate
 ```
 
-With `RUNTIME_STORE=memory` the API runs the worker in-process.
+With Docker: `docker compose up -d && pnpm db:migrate`.
 
-## Layout (spec Section 10) and owners (spec 18.2)
+**Run the services:**
 
-| Path | Owner | What |
-|---|---|---|
-| `packages/contracts` | P1 | Zod schemas (Section 9), interfaces for every role, error codes / audit actions / events (one file per owner), config loader, fixtures, in-memory fakes, logger with redaction, `KeyedMutex`, `insertIdempotent` |
-| `packages/db` | P1 (+ per-owner migration folders) | Migration runner, Section 8 schema, roles/grants (`campus_app` cannot read `vault.*`), Postgres repos for P1 stores |
-| `packages/harness` | P1 | Turn pipeline (4.2), router, agent runtime (model step → gateway → approvals), budgets, rate limits, structured output + single retry, `AnthropicModelClient`, queue worker |
-| `packages/agents` | P1 | `PersonalAgent`, `GroupAgent`, in-process coordination bus, deterministic coordinator |
-| `apps/worker` | P1 | DI container + feature flags, worker process, chat simulator |
-| `apps/api` | P1 shell; P2 webhooks; P4 OAuth/approvals | HTTP server, trace API |
-| `packages/messaging`, `packages/identity`, `apps/web` | P2 | iMessage via BlueBubbles, sign-up by texted code, auth gate, nudges, membership, web pages ([setup](apps/web/README.md)) |
-| `packages/context`, `hackathon/cubbie-skill` | P3 | Supermemory v5, broker, consent, buckets, forgetting; Cubbie Skill |
-| `packages/tools`, `packages/approvals`, `packages/workflows` | P4 | Catalog, gateway, permissions, vault, OAuth, approvals; payments (stretch) |
-| `tests/integration` | P1 (others contribute by PR) | Shared acceptance tests (18.9) |
-
-**Import rule (enforced by ESLint):** a package may import only `@campus/contracts` and its own files.
-Apps and `tests/` are composition roots and may import anything.
-
-## How a turn flows
-
-```
-webhook (P2 route) → messaging.verifyWebhook + normalize → pipeline.ingest  [dedupe + enqueue, ack fast]
-worker → claimNext (one in-flight turn per conversation, FIFO) → pipeline.processEvent:
-  identity + membership → auth gate (unverified: no model, no memory, rate-limited nudge)
-  → route (DM → personal agent; group → group agent only when addressed)
-  → text approval reply? ("YES 4821" in a 1:1)
-  → agent: context (memory/broker) → model step (strict JSON proposals, 1 retry) → tool gateway → approvals
-  → plain-text reply → consent-checked memory write → audit
+```bash
+pnpm dev:api      # Fastify API: webhooks, approvals, web pages, trace API
+pnpm dev:worker   # the queue worker (or use RUNTIME_STORE=memory to run it in-process)
 ```
 
-The model never picks the user, conversation, namespace, credentials or recipients. Proposals are
-schema-validated (extra keys such as `userId` invalidate the output). Permission changes are honoured
-only from the user's own DM, when their own words ask for it, before any tool output was seen.
-Money never moves on a chat message: confirming a group plan sends the payer a private web link.
+No Mac handy for BlueBubbles? Turn on `DEV_SIMULATOR` and open `/dev/chat` for a fake iMessage UI with
+working 👍 buttons. Everything except the Mac is real.
 
-## Swapping a fake for a real implementation
+## 🗺️ What's in the box
 
-1. Implement the interfaces from `packages/contracts/src/interfaces/p<N>.ts` in your package.
-2. Export the factory named in `REAL_MODULES` (`packages/contracts/src/module-factories.ts`):
+| Package | What it does |
+|---|---|
+| `packages/harness` | Turn pipeline, router, agent runtime, budgets, rate limits, model clients (Claude / Gemini) |
+| `packages/agents` | Personal + group agents, coordination bus, order tracking |
+| `packages/messaging` | BlueBubbles iMessage adapter (incl. tapbacks) |
+| `packages/identity` | Sign-up by texted code, membership, auth gate, nudges |
+| `packages/context` | Supermemory memory layer, consent broker, forgetting |
+| `packages/grubhub` | Interim Grubhub dining connector |
+| `packages/tools` · `approvals` · `workflows` | Tool catalog, gateway, permissions, vault, OAuth, approvals |
+| `packages/contracts` | Zod schemas and interfaces for every module, plus in-memory fakes |
+| `packages/db` | Migrations, schema, Postgres repos |
+| `apps/api` · `apps/worker` · `apps/web` | HTTP server, queue worker + simulator, web pages |
 
-   | Flag | Package | Export |
-   |---|---|---|
-   | `USE_REAL_MESSAGING` | `@campus/messaging` | `createMessagingAdapter(deps)` |
-   | `USE_REAL_IDENTITY` | `@campus/identity` | `createIdentityModule(deps)` → `{ identity, membership, authGate, nudges }` |
-   | `USE_REAL_MEMORY` | `@campus/context` | `createContextModule(deps)` → `{ memoryStore, broker, consent, buckets, memoryPolicy }` |
-   | `USE_REAL_TOOLS` | `@campus/approvals` + `@campus/tools` | `createApprovalsModule(deps)`, `createToolsModule(deps)` → `{ gateway, permissions, connections, vault? }` |
-   | `USE_REAL_MODEL` | built in (`@campus/harness`) | `MODEL_PROVIDER=anthropic` → `AnthropicModelClient`; `MODEL_PROVIDER=gemini` → `GeminiModelClient` (both need `MODEL_API_KEY`) |
+**Tech:** TypeScript · Node 22 · Fastify · Zod · Postgres / PGlite · Supermemory · BlueBubbles ·
+Claude / Gemini · Composio · Vitest
 
-   `deps` carries `config`, `logger` (redacting), `sql` (app role), `audit`, `clock`, plus what your
-   module needs (`messaging`, `membership`, `sqlVault`, `approvals`, `broker`).
-3. Add required env vars to your own section in `packages/contracts/src/config/config.p<N>.ts` and `.env.example`.
-4. Flip the flag at your integration point (I1–I4), run `pnpm sim demo` and `pnpm test`.
+## 📚 Go deeper
 
-If a flag is on but the export is missing, startup fails with a clear `module_not_implemented` error.
+- [**Development guide**](docs/DEVELOPMENT.md): feature flags, swapping fakes for real modules, team rules
+- [**ARCHITECTURE.md**](ARCHITECTURE.md): the big-picture design and the 24-hour build plan
+- [**harness-spec.md**](harness-spec.md): the full build spec (bring snacks, it's long)
+- [**Grubhub connector**](packages/grubhub/README.md): setup and what's verified
 
-## Team rules (spec 18.6)
+## ❓ FAQ
 
-1. Edit only packages you own (CODEOWNERS); otherwise open a small PR to the owner.
-2. `packages/contracts` changes: label `contract-change`, all four review (~15 min), P1 merges; additive only after M0.
-3. Migrations: `packages/db/migrations/<owner>/YYYYMMDDHHMMSS_description.sql`; never edit another owner's or an applied file (the runner checksums them).
-4. Root config, lockfile, CI, `.env.example` structure: P1. Add dependencies to your own package manifest; on lockfile conflicts rebase and regenerate.
-5. `.env.example`: edit only your section.
-6. Audit actions, error codes, event names: add to your own `*.p<N>.ts` file.
-7. Merge incomplete work behind a flag (default off).
-8. Trunk-based: short branches, PRs under ~1 hour, rebase often.
-9. Tests live with the owner; cross-package acceptance tests live in `tests/integration` (P1).
-10. No secrets in the repo or chat transcripts.
-11. Paired review for security-critical code: P1↔P4 (pipeline↔gateway), P2↔P3 (auth gate↔broker).
+**Will it order food without asking me?**
+No. The group 👍s a plan, then the payer approves the exact total privately. No approval, no order.
 
-## Verified vs unverified (spec 3.3)
+**Can the group agent read my private chats?**
+No. It asks your personal agent, which answers with what's needed ("works for them, here's what they'd
+order") and nothing else.
 
-Built behind interfaces because they are not yet confirmed: Supermemory v5 naming rules, profile filters
-and scoped keys (P3); Composio coverage (P4).
+**Can someone prompt-inject it into buying 400 tacos?**
+They can try. Spend tools need the payer's approval of the exact total, under a spending cap, and
+permission changes made from inside a group chat don't count.
 
-**Team decisions that differ from the spec:** iMessage goes through **BlueBubbles** (a Mac running
-BlueBubbles Server) instead of Sendblue, so sign-up uses a self-built "text this code to the bot" flow
-instead of Sendblue Verify (spec 16 open decision 3). BlueBubbles payload shapes were checked against its
-server source; BlueBubbles webhooks are unsigned, so the webhook URL carries a secret. A personal agent
-reads its own user's memory by default, and group chats feed the group's memory with everything said
-there (spec 5.3 kept for 1:1 chats only). `packages/contracts/src/fixtures/sendblue.ts` is now unused by P2.
+**Is the Grubhub integration official?**
+Lol, no. See the warning above. We're upfront about that.
 
-**Honesty rule:** sandbox/test transactions are always labelled as simulated, never as real orders.
+**Why iMessage?**
+Because that's where the group chat already is. Nobody's downloading a new app to decide on tacos.
+
+---
+
+<div align="center">
+
+Built in ~24 hours at **DevHacks S3** by four people, several agents and a frankly irresponsible amount of caffeine. ☕
+
+*No burritos were harmed in the making of this README. Several were quoted.*
+
+</div>
