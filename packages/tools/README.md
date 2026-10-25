@@ -250,3 +250,7 @@ but their live integration acceptance gates remain blocked by credentials/infras
 | §§8, 18.5, 18.8 payments/order stretch | intentionally not started | M3 prerequisites absent; no explicit authorization |
 
 Full per-file inventory and observed check results are in `IMPLEMENTATION-REPORT.md`.
+
+## Read-only search and Gmail integration
+
+See [COMPOSIO-INTEGRATION.md](./COMPOSIO-INTEGRATION.md) for the approved Composio catalog, P1 invocation examples, Gmail OAuth wiring, test results, and current live API permission blockers.

@@ -15,6 +15,8 @@ export function connectionHandlers(service: ConnectionService) {
   });
   return {
     list: (session: WebSession) => service.list(session),
+    connectPublicSearch: (session: WebSession, serverId: string) =>
+      service.connectPublicSearch(session, serverId),
     start: async (session: WebSession, serverId: string) => {
       try {
         return { statusCode: 200, body: await service.initiate(session, serverId) };

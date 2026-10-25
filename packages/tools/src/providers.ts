@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { Composio } from '@composio/core';
 import type { CallContext, ToolManifest, ToolProvider, ToolResult } from './ports.ts';
 import { httpsUrl, requireThat, SecurityError } from './security.ts';
+import { approvedComposioTool } from './composio-readonly.ts';
 
 /** listTools has no ctx in the spec: gateway injects discovery credentials into an
  * async-local scope, never into a global mutable provider singleton. */
@@ -128,7 +129,29 @@ export type ComposioServerConfig = {
   authConfigId: string;
   version: string;
   tools: Record<string, ToolPolicy>;
+  noAuth?: boolean;
 };
+/** Only stable reason codes escape the SDK boundary, never provider bodies/errors. */
+export function composioFailure(error: unknown, fallback: string): SecurityError {
+  if (error instanceof SecurityError) return error;
+  const statuses = new Set<number>();
+  let current = error;
+  for (let i = 0; i < 5 && current && typeof current === 'object'; i++) {
+    const e = current as { status?: number; statusCode?: number; cause?: unknown };
+    if (e.status) statuses.add(e.status);
+    if (e.statusCode) statuses.add(e.statusCode);
+    current = e.cause;
+  }
+  return new SecurityError(
+    statuses.has(429)
+      ? 'composio_rate_limited'
+      : statuses.has(401) || statuses.has(403)
+        ? 'composio_api_access_denied'
+        : statuses.has(404)
+          ? 'composio_account_unavailable'
+          : fallback,
+  );
+}
 export type ComposioSdk = Pick<Composio, 'tools' | 'connectedAccounts'>;
 export function createComposio(apiKey: string): Composio {
   requireThat(apiKey, 'composio_key_missing');
@@ -152,6 +175,7 @@ export class ComposioProvider implements ToolProvider {
   config(serverId: string): ComposioServerConfig {
     const c = this.configs.get(serverId);
     requireThat(c && c.version && c.version !== 'latest', 'composio_config_missing');
+    requireThat(!c.noAuth || c.toolkit === 'composio_search', 'composio_noauth_denied');
     return c;
   }
   async listTools(serverId: string): Promise<ToolManifest[]> {
@@ -161,6 +185,7 @@ export class ComposioProvider implements ToolProvider {
     try {
       const result: ToolManifest[] = [];
       for (const [name, policy] of Object.entries(config.tools)) {
+        if (!approvedComposioTool(config.toolkit, name)) continue;
         const tool = await this.sdk.tools.getRawComposioToolBySlug(
           name,
           { version: config.version },
@@ -170,15 +195,26 @@ export class ComposioProvider implements ToolProvider {
           tool.inputParameters && tool.toolkit?.slug === config.toolkit,
           'composio_manifest_invalid',
         );
+        const inputSchema = structuredClone(tool.inputParameters) as Record<string, unknown>;
+        // Gmail's API user_id is always 'me', injected below from the verified connection.
+        if (config.toolkit === 'gmail') {
+          const properties = inputSchema.properties as Record<string, unknown>;
+          delete properties.user_id;
+          if (Array.isArray(inputSchema.required))
+            inputSchema.required = inputSchema.required.filter((n) => n !== 'user_id');
+          if (name === 'GMAIL_FETCH_EMAILS') {
+            properties.max_results = { ...(properties.max_results as object), maximum: 20 };
+          }
+        }
         result.push({
           ...policy,
           name,
-          inputSchema: tool.inputParameters as Record<string, unknown>,
+          inputSchema,
         });
       }
       return result;
-    } catch {
-      throw new SecurityError('composio_discovery_failed');
+    } catch (error) {
+      throw composioFailure(error, 'composio_discovery_failed');
     }
   }
   async verifyAccount(
@@ -190,15 +226,20 @@ export class ComposioProvider implements ToolProvider {
     const config = this.config(serverId);
     let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
-      const response = await this.sdk.connectedAccounts.list(
-        {
-          userIds: [userId],
-          authConfigIds: [config.authConfigId],
-          toolkitSlugs: [config.toolkit],
-          cursor,
-        },
-        { signal },
-      );
+      let response;
+      try {
+        response = await this.sdk.connectedAccounts.list(
+          {
+            userIds: [userId],
+            authConfigIds: [config.authConfigId],
+            toolkitSlugs: [config.toolkit],
+            cursor,
+          },
+          { signal },
+        );
+      } catch (error) {
+        throw composioFailure(error, 'composio_connection_check_failed');
+      }
       const account = response.items.find((a) => a.id === accountId);
       if (account) {
         requireThat(
@@ -220,23 +261,42 @@ export class ComposioProvider implements ToolProvider {
   ): Promise<ToolResult> {
     const config = this.config(serverId);
     requireThat(Object.hasOwn(config.tools, tool), 'provider_tool_unknown');
+    requireThat(approvedComposioTool(config.toolkit, tool), 'provider_tool_denied');
     const accountId = ctx.credentials.api_key;
-    requireThat(accountId, 'composio_account_missing');
+    requireThat(config.noAuth || accountId, 'composio_account_missing');
     try {
-      await this.verifyAccount(serverId, ctx.userId, accountId, ctx.signal);
+      if (!config.noAuth) await this.verifyAccount(serverId, ctx.userId, accountId!, ctx.signal);
+      const arguments_ = { ...(args as Record<string, unknown>) };
+      if (config.toolkit === 'gmail') {
+        requireThat(!Object.hasOwn(arguments_, 'user_id'), 'model_authority_field_denied');
+        arguments_.user_id = 'me';
+        if (tool === 'GMAIL_FETCH_EMAILS') {
+          arguments_.max_results ??= 10;
+          requireThat(
+            Number.isInteger(arguments_.max_results) &&
+              Number(arguments_.max_results) >= 1 &&
+              Number(arguments_.max_results) <= 20,
+            'tool_args_invalid',
+          );
+          arguments_.include_payload ??= false;
+          arguments_.verbose ??= false;
+        }
+      }
       const result = await this.sdk.tools.execute(
         tool,
         {
           userId: ctx.userId,
-          connectedAccountId: accountId,
-          arguments: args as Record<string, unknown>,
+          ...(config.noAuth ? {} : { connectedAccountId: accountId }),
+          arguments: arguments_,
           version: config.version,
+          allowTracing: false,
         },
         { signal: ctx.signal },
       );
-      return { content: result.data, isError: !result.successful };
-    } catch {
-      throw new SecurityError('composio_call_failed');
+      if (!result.successful) throw new SecurityError('composio_execution_failed');
+      return { content: result.data, isError: false };
+    } catch (error) {
+      throw composioFailure(error, 'composio_call_failed');
     }
   }
 }

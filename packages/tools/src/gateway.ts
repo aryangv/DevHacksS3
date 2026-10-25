@@ -15,6 +15,7 @@ import type { ConnectionService } from './connections.ts';
 import type { ToolCatalog } from './catalog.ts';
 import type { PermissionResolver } from './permissions.ts';
 import { hash, requireThat, safeData, SecurityError } from './security.ts';
+import { approvedComposioTool } from './composio-readonly.ts';
 
 const proposalSchema = z
   .object({
@@ -32,6 +33,11 @@ export type GatewayResult =
       provenance: { server: string; tool: string; untrusted: true; disclosureExpiresAt?: string };
     }
   | { status: 'pending'; approvalId: string; channel: 'text' | 'web' }
+  | {
+      status: 'connection_required';
+      reasonCode: string;
+      connection: { server: string; startPath: string; authenticationRequired: true };
+    }
   | { status: 'denied' | 'error' | 'unknown'; reasonCode: string };
 export class ToolGateway {
   private store: ToolStore;
@@ -100,6 +106,8 @@ export class ToolGateway {
           AbortSignal.timeout(this.timeoutMs),
         );
         for (const tool of await this.catalog.manifests(server.id, access.ctx)) {
+          if (server.provider === 'composio' && !approvedComposioTool(server.slug, tool.name))
+            continue;
           if (tool.riskClass === 'spend') continue; // payments are gated stretch work
           const bound = ctx.toolArgumentBindings?.[`${server.slug}__${tool.name}`] ?? {};
           const trusted = tool.trustedArgumentNames ?? [];
@@ -145,6 +153,7 @@ export class ToolGateway {
       abort = new AbortController(),
       timer = setTimeout(() => abort.abort(), this.timeoutMs);
     let serverId: string | undefined,
+      managedServer: string | undefined,
       toolName = 'unknown',
       argsHash = hash(null),
       mode: Mode = 'deny',
@@ -164,6 +173,9 @@ export class ToolGateway {
       const server = await this.store.server(p.server);
       requireThat(server?.status === 'active', 'server_unavailable');
       serverId = server.id;
+      if (server.authType === 'composio_managed') managedServer = server.slug;
+      if (server.provider === 'composio')
+        requireThat(approvedComposioTool(server.slug, p.tool), 'tool_not_allowed');
       const access = await this.connections.credentials(ctx.userId, server, abort.signal);
       const tools = await this.catalog.manifests(server.id, access.ctx);
       const tool = tools.find((t) => t.name === p.tool);
@@ -396,6 +408,27 @@ export class ToolGateway {
         policyResult: 'deny',
         detail: { reasonCode: code, status: unknown ? 'unknown' : 'rejected' },
       });
+      if (
+        managedServer &&
+        [
+          'connection_unavailable',
+          'connection_needs_reauth',
+          'credential_missing',
+          'composio_connection_inactive',
+          'composio_account_owner_mismatch',
+          'composio_account_unavailable',
+        ].includes(code)
+      ) {
+        return {
+          status: 'connection_required',
+          reasonCode: code,
+          connection: {
+            server: managedServer,
+            startPath: `/connections/${encodeURIComponent(managedServer)}/start`,
+            authenticationRequired: true,
+          },
+        };
+      }
       return { status: unknown ? 'unknown' : executing ? 'error' : 'denied', reasonCode: code };
     } finally {
       clearTimeout(timer);

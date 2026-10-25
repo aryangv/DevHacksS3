@@ -1,5 +1,12 @@
 import { requireThat } from './security.ts';
 import { EnvelopeCipher } from './vault.ts';
+import { createComposio } from './providers.ts';
+
+export function composioFromEnv(env: Record<string, string | undefined>) {
+  requireThat(env.USE_REAL_TOOLS === 'true', 'real_tools_disabled');
+  requireThat(env.COMPOSIO_API_KEY, 'composio_key_missing');
+  return createComposio(env.COMPOSIO_API_KEY);
+}
 
 export function vaultCipherFromEnv(env: Record<string, string | undefined>): EnvelopeCipher {
   const current = Number(env.VAULT_KEY_ID),

@@ -152,7 +152,7 @@ test('Composio discovers reviewed version-pinned schemas, pins actor/account/ver
         {},
         { ...ctx, credentials: { api_key: 'account-b' } },
       ),
-    /composio_call_failed/,
+    /composio_account_owner_mismatch/,
   );
   assert.equal(calls.length, 1);
   const unpinned = new ComposioProvider(

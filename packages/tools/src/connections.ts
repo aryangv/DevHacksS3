@@ -439,6 +439,30 @@ export class ConnectionService {
     });
     await this.event(session.userId, 'connection.connected', server.id);
   }
+  /** Explicit per-user opt-in to the reviewed public search integration (no OAuth). */
+  async connectPublicSearch(session: WebSession, serverId: string): Promise<void> {
+    this.session(session);
+    const server = await this.store.server(serverId);
+    requireThat(
+      server?.status === 'active' && server.provider === 'composio' && server.authType === 'none',
+      'public_connection_denied',
+    );
+    requireThat(
+      this.composio?.provider.config(server.id).noAuth === true,
+      'public_connection_denied',
+    );
+    await this.store.withConnectionLock(session.userId, server.id, async (store) => {
+      const old = await store.connection(session.userId, server.id);
+      await store.saveConnection({
+        id: old?.id ?? randomUUID(),
+        userId: session.userId,
+        serverId: server.id,
+        status: 'connected',
+        grantedScopes: [],
+      });
+    });
+    await this.event(session.userId, 'connection.connected', server.id);
+  }
   async credentials(
     userId: string,
     server: Server,
@@ -481,7 +505,17 @@ export class ConnectionService {
           requireThat(this.composio, 'composio_unavailable');
           try {
             await this.composio.provider.verifyAccount(server.id, userId, token.secret, signal);
-          } catch {
+          } catch (error) {
+            // Project key permission failures, rate limits and outages are not user revocations.
+            if (
+              error instanceof SecurityError &&
+              ![
+                'composio_connection_inactive',
+                'composio_account_owner_mismatch',
+                'composio_account_unavailable',
+              ].includes(error.code)
+            )
+              throw error;
             await store.saveConnection({ ...c, status: 'needs_reauth' });
             await this.event(userId, 'connection.needs_reauth', server.id, 'deny');
             throw new SecurityError('connection_needs_reauth');
