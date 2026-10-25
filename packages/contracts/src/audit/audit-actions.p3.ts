@@ -8,4 +8,10 @@ export const AUDIT_ACTIONS_P3 = [
   "consent.granted",
   "consent.revoked",
   "memory.forgotten",
+  "consent.requested",
+  "consent.declined",
+  "memory.settings_updated",
+  "memory.provisioned",
+  "memory.deleted_user",
+  "memory.member_content_removed",
 ] as const;
