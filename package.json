@@ -1,0 +1,35 @@
+{
+  "name": "campus-agent",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.12.3",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
+    "db:migrate": "tsx --env-file-if-exists=.env packages/db/src/cli/migrate.ts",
+    "sim": "tsx --env-file-if-exists=.env apps/worker/src/sim/cli.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env apps/worker/src/main.ts",
+    "dev:api": "tsx watch --env-file-if-exists=.env apps/api/src/main.ts",
+    "start:worker": "tsx --env-file-if-exists=.env apps/worker/src/main.ts",
+    "start:api": "tsx --env-file-if-exists=.env apps/api/src/main.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.0",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
+  }
+}

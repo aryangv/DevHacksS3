@@ -1,0 +1,415 @@
+import {
+  DeterministicCoordinator,
+  GroupAgentRegistry,
+  InProcessCoordinationBus,
+  PersonalAgentRegistry,
+} from "@campus/agents";
+import {
+  type AppConfig,
+  type ApprovalService,
+  type AuditLog,
+  type AuthGate,
+  type BucketProvisioner,
+  type Clock,
+  type ConnectionService,
+  type ConsentService,
+  type ContextBroker,
+  type ContextModule,
+  type IdentityModule,
+  type IdentityService,
+  type InboundQueue,
+  type Logger,
+  type MemoryPolicy,
+  type MemoryStore,
+  type MembershipService,
+  type MessageLog,
+  type MessagingAdapter,
+  type ModelClient,
+  type ModuleDeps,
+  ModuleNotImplementedError,
+  type NudgeService,
+  type PermissionResolver,
+  REAL_MODULES,
+  type SqlClient,
+  type TaskStore,
+  type ToolGateway,
+  type ToolsModule,
+  createLogger,
+  invocationNames,
+  loadConfig,
+  systemClock,
+} from "@campus/contracts";
+import {
+  FakeApprovalService,
+  FakeAuthGate,
+  FakeBucketProvisioner,
+  FakeConnectionService,
+  FakeConsentService,
+  FakeContextBroker,
+  FakeIdentityService,
+  FakeMembershipService,
+  FakeMemoryPolicy,
+  FakeMemoryStore,
+  FakeMessagingAdapter,
+  FakeModelClient,
+  FakeNudgeService,
+  FakePermissionResolver,
+  FakeToolGateway,
+  FakeToolProvider,
+  InMemoryAuditLog,
+  InMemoryInboundQueue,
+  InMemoryMessageLog,
+  InMemoryTaskStore,
+  heuristicResponder,
+} from "@campus/contracts/fakes";
+import { PgAuditLog, PgInboundQueue, PgMessageLog, PgTaskStore, createSqlClient } from "@campus/db";
+import {
+  AgentRuntimeImpl,
+  AnthropicModelClient,
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_GEMINI_MODEL,
+  GeminiModelClient,
+  QueueWorker,
+  TurnPipelineImpl,
+  budgetsFromConfig,
+} from "@campus/harness";
+import { MirroringIdentityService, MirroringMembershipService } from "./dev-pg-mirror";
+
+// Dependency-injection container (spec 18.3 item 7). Each USE_REAL_* flag selects the owner's real
+// implementation (loaded by its factory export, see REAL_MODULES) or the in-memory fake.
+// This file is the only place that names concrete implementations.
+
+export type Container = {
+  config: AppConfig;
+  logger: Logger;
+  clock: Clock;
+  sql: SqlClient | null;
+  audit: AuditLog;
+  tasks: TaskStore;
+  queue: InboundQueue;
+  messageLog: MessageLog;
+  messaging: MessagingAdapter;
+  identity: IdentityService;
+  membership: MembershipService;
+  authGate: AuthGate;
+  nudges: NudgeService;
+  memoryStore: MemoryStore;
+  broker: ContextBroker;
+  consent: ConsentService;
+  buckets: BucketProvisioner;
+  memoryPolicy: MemoryPolicy;
+  approvals: ApprovalService;
+  gateway: ToolGateway;
+  permissions: PermissionResolver;
+  connections: ConnectionService;
+  model: ModelClient;
+  runtime: AgentRuntimeImpl;
+  pipeline: TurnPipelineImpl;
+  worker: QueueWorker;
+  /** Which implementation each slot uses ("fake" | "real"), for logs and the simulator banner. */
+  wiring: Record<string, "fake" | "real">;
+  /** Present when the corresponding fakes are wired (simulator/test seeding). */
+  fakes: {
+    messaging?: FakeMessagingAdapter;
+    identity?: FakeIdentityService;
+    broker?: FakeContextBroker;
+    consent?: FakeConsentService;
+    memoryStore?: FakeMemoryStore;
+    connections?: FakeConnectionService;
+    toolProvider?: FakeToolProvider;
+    approvals?: FakeApprovalService;
+    permissions?: FakePermissionResolver;
+    model?: FakeModelClient;
+  };
+  close(): Promise<void>;
+};
+
+export type ContainerOverrides = Partial<
+  Pick<Container, "messaging" | "model" | "audit" | "tasks" | "queue" | "messageLog"> & { sql: SqlClient }
+>;
+
+async function loadReal<T>(key: keyof typeof REAL_MODULES, deps: unknown): Promise<T> {
+  const spec = REAL_MODULES[key];
+  const mod = (await import(spec.pkg)) as Record<string, unknown>;
+  const factory = mod[spec.exportName];
+  if (typeof factory !== "function") throw new ModuleNotImplementedError(spec.pkg, spec.exportName);
+  return (await (factory as (d: unknown) => T | Promise<T>)(deps)) as T;
+}
+
+export async function buildContainer(
+  opts: {
+    config?: AppConfig;
+    env?: Record<string, string | undefined>;
+    overrides?: ContainerOverrides;
+    logger?: Logger;
+    clock?: Clock;
+  } = {},
+): Promise<Container> {
+  const config = opts.config ?? loadConfig(opts.env ?? process.env);
+  const logger = opts.logger ?? createLogger({ level: config.LOG_LEVEL });
+  const clock = opts.clock ?? systemClock;
+  const o = opts.overrides ?? {};
+  const wiring: Container["wiring"] = {};
+  const fakes: Container["fakes"] = {};
+  const closers: Array<() => Promise<void>> = [];
+
+  // ---- database handles ----
+  const needsDb =
+    config.RUNTIME_STORE === "postgres" ||
+    config.USE_REAL_IDENTITY ||
+    config.USE_REAL_MEMORY ||
+    config.USE_REAL_TOOLS;
+  let sql: SqlClient | null = o.sql ?? null;
+  if (!sql && needsDb && config.DATABASE_URL) {
+    sql = await createSqlClient(config.DATABASE_URL);
+    closers.push(() => sql!.close());
+  }
+  let sqlVault: SqlClient | null = null;
+  if (config.USE_REAL_TOOLS && config.DATABASE_URL_VAULT) {
+    sqlVault = await createSqlClient(config.DATABASE_URL_VAULT);
+    closers.push(() => sqlVault!.close());
+  }
+
+  // ---- P1 runtime stores ----
+  const pg = config.RUNTIME_STORE === "postgres" && sql;
+  const audit = o.audit ?? (pg ? new PgAuditLog(sql!) : new InMemoryAuditLog(clock));
+  const tasks = o.tasks ?? (pg ? new PgTaskStore(sql!) : new InMemoryTaskStore(clock));
+  const queue = o.queue ?? (pg ? new PgInboundQueue(sql!) : new InMemoryInboundQueue(clock));
+  wiring.runtimeStore = pg ? "real" : "fake";
+
+  const moduleDeps: ModuleDeps = { config, logger, sql, audit, clock };
+
+  // ---- P2: messaging ----
+  let messaging: MessagingAdapter;
+  if (o.messaging) messaging = o.messaging;
+  else if (config.USE_REAL_MESSAGING) messaging = await loadReal<MessagingAdapter>("messaging", moduleDeps);
+  else messaging = fakes.messaging = new FakeMessagingAdapter();
+  wiring.messaging = config.USE_REAL_MESSAGING && !o.messaging ? "real" : "fake";
+
+  // ---- P2: identity, membership, auth gate, nudges ----
+  let identity: IdentityService, membership: MembershipService, authGate: AuthGate, nudges: NudgeService;
+  if (config.USE_REAL_IDENTITY) {
+    ({ identity, membership, authGate, nudges } = await loadReal<IdentityModule>("identity", {
+      ...moduleDeps,
+      messaging,
+    }));
+    wiring.identity = "real";
+  } else {
+    const fakeIdentity = (fakes.identity = new FakeIdentityService({ defaultStatus: "verified" }));
+    const fakeMembership = new FakeMembershipService(fakeIdentity, clock);
+    // Dev glue: with fake identity + Postgres runtime store, mirror identities/conversations into the
+    // P2 tables so core.messages / core.agent_tasks foreign keys hold. Never used with real identity.
+    identity = pg ? new MirroringIdentityService(fakeIdentity, sql!) : fakeIdentity;
+    membership = pg ? new MirroringMembershipService(fakeMembership, fakeIdentity, sql!) : fakeMembership;
+    authGate = new FakeAuthGate();
+    nudges = new FakeNudgeService(messaging, {
+      ...(config.APP_ORIGIN ? { appOrigin: config.APP_ORIGIN } : {}),
+      intervalHours: config.NUDGE_INTERVAL_HOURS,
+      clock,
+    });
+    wiring.identity = "fake";
+  }
+
+  const messageLog =
+    o.messageLog ??
+    (pg
+      ? new PgMessageLog(sql!)
+      : new InMemoryMessageLog((id) => {
+          const rec = fakes.identity?.byExternalIdentityId(id);
+          return rec
+            ? { userId: rec.status === "verified" ? rec.userId : null, displayName: rec.displayName }
+            : undefined;
+        }));
+
+  // ---- P3: memory, broker, consent ----
+  let memoryStore: MemoryStore,
+    broker: ContextBroker,
+    consent: ConsentService,
+    buckets: BucketProvisioner,
+    memoryPolicy: MemoryPolicy;
+  if (config.USE_REAL_MEMORY) {
+    ({ memoryStore, broker, consent, buckets, memoryPolicy } = await loadReal<ContextModule>("context", {
+      ...moduleDeps,
+      membership,
+    }));
+    wiring.memory = "real";
+  } else {
+    memoryStore = fakes.memoryStore = new FakeMemoryStore();
+    broker = fakes.broker = new FakeContextBroker();
+    consent = fakes.consent = new FakeConsentService();
+    buckets = new FakeBucketProvisioner();
+    memoryPolicy = new FakeMemoryPolicy(consent);
+    wiring.memory = "fake";
+  }
+
+  // ---- P4: approvals, tools ----
+  let approvals: ApprovalService,
+    gateway: ToolGateway,
+    permissions: PermissionResolver,
+    connections: ConnectionService;
+  if (config.USE_REAL_TOOLS) {
+    approvals = await loadReal<ApprovalService>("approvals", moduleDeps);
+    ({ gateway, permissions, connections } = await loadReal<ToolsModule>("tools", {
+      ...moduleDeps,
+      sqlVault,
+      approvals,
+      broker,
+    }));
+    wiring.tools = "real";
+  } else {
+    const provider = (fakes.toolProvider = new FakeToolProvider());
+    const fakeConnections = (fakes.connections = new FakeConnectionService({ defaultConnected: true }));
+    const fakePermissions = (fakes.permissions = new FakePermissionResolver());
+    const fakeApprovals = (fakes.approvals = new FakeApprovalService({
+      ...(config.APP_ORIGIN ? { appOrigin: config.APP_ORIGIN } : {}),
+      clock,
+    }));
+    approvals = fakeApprovals;
+    permissions = fakePermissions;
+    connections = fakeConnections;
+    gateway = new FakeToolGateway({
+      provider,
+      connections: fakeConnections,
+      permissions: fakePermissions,
+      approvals: fakeApprovals,
+    });
+    wiring.tools = "fake";
+  }
+
+  // ---- P1: model, runtime, agents, pipeline, worker ----
+  let model: ModelClient;
+  if (o.model) model = o.model;
+  else if (config.USE_REAL_MODEL) {
+    const common = {
+      apiKey: config.MODEL_API_KEY!,
+      effort: config.MODEL_EFFORT,
+      structuredOutput: config.MODEL_STRUCTURED_OUTPUT,
+      logger,
+    };
+    model =
+      config.MODEL_PROVIDER === "gemini"
+        ? new GeminiModelClient({ ...common, model: config.MODEL_NAME ?? DEFAULT_GEMINI_MODEL })
+        : new AnthropicModelClient({ ...common, model: config.MODEL_NAME ?? DEFAULT_ANTHROPIC_MODEL });
+  } else model = fakes.model = new FakeModelClient(heuristicResponder);
+  wiring.model = config.USE_REAL_MODEL && !o.model ? "real" : "fake";
+
+  const budgets = budgetsFromConfig(config);
+  const runtime = new AgentRuntimeImpl({
+    model,
+    gateway,
+    approvals,
+    audit,
+    logger,
+    clock,
+    budgets,
+    rateLimits: {
+      userModelCallsPer10Min: config.RATE_LIMIT_USER_MODEL_CALLS_PER_10MIN,
+      conversationModelCallsPer10Min: config.RATE_LIMIT_CONVERSATION_MODEL_CALLS_PER_10MIN,
+    },
+  });
+
+  const names = invocationNames(config);
+  const personalAgents = new PersonalAgentRegistry({
+    runtime,
+    broker,
+    memoryStore,
+    audit,
+    logger,
+    clock,
+    agentName: config.AGENT_DISPLAY_NAME,
+  });
+  const bus = new InProcessCoordinationBus({
+    personalAgents,
+    tasks,
+    audit,
+    logger,
+    clock,
+    timeoutMs: 10_000,
+  });
+  const groupAgents = new GroupAgentRegistry({
+    runtime,
+    tasks,
+    membership,
+    coordinator: new DeterministicCoordinator(),
+    bus,
+    broker,
+    memoryStore,
+    approvals,
+    audit,
+    logger,
+    clock,
+    agentName: config.AGENT_DISPLAY_NAME,
+    invocationHint: names[0] ?? "agent",
+    optionsTool: config.GROUP_MEAL_OPTIONS_TOOL,
+  });
+
+  const pipeline = new TurnPipelineImpl({
+    queue,
+    messageLog,
+    audit,
+    logger,
+    clock,
+    budgets,
+    invocationNames: names,
+    messaging,
+    identity,
+    membership,
+    authGate,
+    nudges,
+    memoryStore,
+    memoryPolicy,
+    approvals,
+    gateway,
+    runtime,
+    personalAgents,
+    groupAgents,
+  });
+
+  const worker = new QueueWorker({
+    queue,
+    pipeline,
+    audit,
+    logger,
+    clock,
+    maxAttempts: config.QUEUE_MAX_ATTEMPTS,
+    pollIntervalMs: config.WORKER_POLL_INTERVAL_MS,
+    concurrency: Math.max(1, config.WORKER_CONCURRENCY),
+  });
+
+  logger.info("container ready", { wiring });
+
+  return {
+    config,
+    logger,
+    clock,
+    sql,
+    audit,
+    tasks,
+    queue,
+    messageLog,
+    messaging,
+    identity,
+    membership,
+    authGate,
+    nudges,
+    memoryStore,
+    broker,
+    consent,
+    buckets,
+    memoryPolicy,
+    approvals,
+    gateway,
+    permissions,
+    connections,
+    model,
+    runtime,
+    pipeline,
+    worker,
+    wiring,
+    fakes,
+    close: async () => {
+      await worker.stop();
+      for (const c of closers.reverse()) await c().catch(() => undefined);
+    },
+  };
+}
