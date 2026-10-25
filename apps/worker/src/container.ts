@@ -69,6 +69,7 @@ import {
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_GEMINI_MODEL,
   GeminiModelClient,
+  MaintenanceScheduler,
   QueueWorker,
   TurnPipelineImpl,
   budgetsFromConfig,
@@ -106,6 +107,8 @@ export type Container = {
   runtime: AgentRuntimeImpl;
   pipeline: TurnPipelineImpl;
   worker: QueueWorker;
+  /** Background jobs (memory cleanup/retention) when the real memory module provides them. Start with the worker. */
+  maintenance: MaintenanceScheduler | null;
   /** Which implementation each slot uses ("fake" | "real"), for logs and the simulator banner. */
   wiring: Record<string, "fake" | "real">;
   /** Present when the corresponding fakes are wired (simulator/test seeding). */
@@ -227,11 +230,17 @@ export async function buildContainer(
     consent: ConsentService,
     buckets: BucketProvisioner,
     memoryPolicy: MemoryPolicy;
+  let maintenance: MaintenanceScheduler | null = null;
   if (config.USE_REAL_MEMORY) {
-    ({ memoryStore, broker, consent, buckets, memoryPolicy } = await loadReal<ContextModule>("context", {
-      ...moduleDeps,
-      membership,
-    }));
+    const contextModule = await loadReal<ContextModule>("context", { ...moduleDeps, membership });
+    ({ memoryStore, broker, consent, buckets, memoryPolicy } = contextModule);
+    if (contextModule.maintenance) {
+      maintenance = MaintenanceScheduler.forMemory(contextModule.maintenance, {
+        cleanupEveryMs: config.MEMORY_CLEANUP_INTERVAL_MS,
+        purgeEveryMs: config.MEMORY_PURGE_INTERVAL_MS,
+        logger,
+      });
+    }
     wiring.memory = "real";
   } else {
     memoryStore = fakes.memoryStore = new FakeMemoryStore();
@@ -405,10 +414,12 @@ export async function buildContainer(
     runtime,
     pipeline,
     worker,
+    maintenance,
     wiring,
     fakes,
     close: async () => {
       await worker.stop();
+      await maintenance?.stop();
       for (const c of closers.reverse()) await c().catch(() => undefined);
     },
   };

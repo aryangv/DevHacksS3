@@ -2,6 +2,7 @@
 export * from "./pipeline";
 export * from "./runtime";
 export * from "./worker";
+export * from "./maintenance";
 export * from "./router";
 export * from "./budgets";
 export * from "./rate-limit";

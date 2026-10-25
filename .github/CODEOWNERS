@@ -1,47 +1,47 @@
 # Package ownership (harness-spec 18.2 / 18.6 rule 1). Edit only what you own; PR to the owner otherwise.
-# Replace each placeholder with the teammate's GitHub handle at kickoff.
-#   P1 = Spine        @REPLACE_WITH_P1_GITHUB_HANDLE
-#   P2 = Front door   @REPLACE_WITH_P2_GITHUB_HANDLE
-#   P3 = Memory       @REPLACE_WITH_P3_GITHUB_HANDLE
+# P4 still needs its handle: replace @REPLACE_WITH_P4_GITHUB_HANDLE.
+#   P1 = Spine        @tarunchottera204
+#   P2 = Front door   @aryangv
+#   P3 = Memory       @aryangv
 #   P4 = Hands        @REPLACE_WITH_P4_GITHUB_HANDLE
 
 # Root/shared files, CI, lockfile, .env.example structure: P1 (rule 4)
-*                                   @REPLACE_WITH_P1_GITHUB_HANDLE
+*                                   @tarunchottera204
 
 # ---- P1: spine ----
-/packages/contracts/                @REPLACE_WITH_P1_GITHUB_HANDLE
-/packages/db/                       @REPLACE_WITH_P1_GITHUB_HANDLE
-/packages/harness/                  @REPLACE_WITH_P1_GITHUB_HANDLE
-/packages/agents/                   @REPLACE_WITH_P1_GITHUB_HANDLE
-/apps/worker/                       @REPLACE_WITH_P1_GITHUB_HANDLE
-/apps/api/src/server.ts             @REPLACE_WITH_P1_GITHUB_HANDLE
-/apps/api/src/routes/trace.ts       @REPLACE_WITH_P1_GITHUB_HANDLE
-/apps/api/src/routes/health.ts      @REPLACE_WITH_P1_GITHUB_HANDLE
-/tests/                             @REPLACE_WITH_P1_GITHUB_HANDLE
+/packages/contracts/                @tarunchottera204
+/packages/db/                       @tarunchottera204
+/packages/harness/                  @tarunchottera204
+/packages/agents/                   @tarunchottera204
+/apps/worker/                       @tarunchottera204
+/apps/api/src/server.ts             @tarunchottera204
+/apps/api/src/routes/trace.ts       @tarunchottera204
+/apps/api/src/routes/health.ts      @tarunchottera204
+/tests/                             @tarunchottera204
 
 # Contract changes need all four reviewers (rule 2)
-/packages/contracts/src/schemas/    @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P2_GITHUB_HANDLE @REPLACE_WITH_P3_GITHUB_HANDLE @REPLACE_WITH_P4_GITHUB_HANDLE
-/packages/contracts/src/interfaces/ @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P2_GITHUB_HANDLE @REPLACE_WITH_P3_GITHUB_HANDLE @REPLACE_WITH_P4_GITHUB_HANDLE
+/packages/contracts/src/schemas/    @tarunchottera204 @aryangv @aryangv @REPLACE_WITH_P4_GITHUB_HANDLE
+/packages/contracts/src/interfaces/ @tarunchottera204 @aryangv @aryangv @REPLACE_WITH_P4_GITHUB_HANDLE
 
 # Per-owner files inside contracts (rule 6: each owner edits only their own file)
-/packages/contracts/src/**/*.p2.ts  @REPLACE_WITH_P2_GITHUB_HANDLE
-/packages/contracts/src/**/*.p3.ts  @REPLACE_WITH_P3_GITHUB_HANDLE
+/packages/contracts/src/**/*.p2.ts  @aryangv
+/packages/contracts/src/**/*.p3.ts  @aryangv
 /packages/contracts/src/**/*.p4.ts  @REPLACE_WITH_P4_GITHUB_HANDLE
-/packages/contracts/src/interfaces/p2.ts @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P2_GITHUB_HANDLE
-/packages/contracts/src/interfaces/p3.ts @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P3_GITHUB_HANDLE
-/packages/contracts/src/interfaces/p4.ts @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P4_GITHUB_HANDLE
+/packages/contracts/src/interfaces/p2.ts @tarunchottera204 @aryangv
+/packages/contracts/src/interfaces/p3.ts @tarunchottera204 @aryangv
+/packages/contracts/src/interfaces/p4.ts @tarunchottera204 @REPLACE_WITH_P4_GITHUB_HANDLE
 
 # ---- P2: front door ----
-/packages/messaging/                @REPLACE_WITH_P2_GITHUB_HANDLE
-/packages/identity/                 @REPLACE_WITH_P2_GITHUB_HANDLE
-/apps/api/src/routes/webhooks.ts    @REPLACE_WITH_P2_GITHUB_HANDLE
-/apps/web/                          @REPLACE_WITH_P2_GITHUB_HANDLE
-/packages/db/migrations/p2/         @REPLACE_WITH_P2_GITHUB_HANDLE
+/packages/messaging/                @aryangv
+/packages/identity/                 @aryangv
+/apps/api/src/routes/webhooks.ts    @aryangv
+/apps/web/                          @aryangv
+/packages/db/migrations/p2/         @aryangv
 
 # ---- P3: memory + Cubbie Skill ----
-/packages/context/                  @REPLACE_WITH_P3_GITHUB_HANDLE
-/hackathon/cubbie-skill/            @REPLACE_WITH_P3_GITHUB_HANDLE
-/packages/db/migrations/p3/         @REPLACE_WITH_P3_GITHUB_HANDLE
+/packages/context/                  @aryangv
+/hackathon/cubbie-skill/            @aryangv
+/packages/db/migrations/p3/         @aryangv
 
 # ---- P4: hands ----
 /packages/tools/                    @REPLACE_WITH_P4_GITHUB_HANDLE
@@ -52,5 +52,5 @@
 /packages/db/migrations/p4/         @REPLACE_WITH_P4_GITHUB_HANDLE
 
 # Security-critical review pairs (rule 11): P1 ↔ P4, P2 ↔ P3
-/packages/harness/src/runtime.ts    @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P4_GITHUB_HANDLE
-/packages/harness/src/pipeline.ts   @REPLACE_WITH_P1_GITHUB_HANDLE @REPLACE_WITH_P4_GITHUB_HANDLE
+/packages/harness/src/runtime.ts    @tarunchottera204 @REPLACE_WITH_P4_GITHUB_HANDLE
+/packages/harness/src/pipeline.ts   @tarunchottera204 @REPLACE_WITH_P4_GITHUB_HANDLE
