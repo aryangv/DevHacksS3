@@ -8,6 +8,7 @@ const app = await buildServer(c);
 // With the in-memory queue the worker must live in this process; with Postgres it can run separately.
 if (c.config.RUN_WORKER_IN_PROCESS || c.config.RUNTIME_STORE === "memory") {
   c.worker.start();
+  c.maintenance?.start();
   c.logger.info("worker running in-process");
 }
 

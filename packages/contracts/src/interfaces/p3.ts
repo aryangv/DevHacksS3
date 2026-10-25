@@ -54,6 +54,17 @@ export interface BucketProvisioner {
   provisionGroup(conversationId: string): Promise<void>;
 }
 
+/**
+ * Background upkeep run by the worker (spec 5.4 retention, 5.8 deletion). Supermemory refuses to
+ * delete documents that are still processing, so refused deletes are queued and retried here.
+ */
+export interface MemoryMaintenance {
+  /** Retry queued deletions. Run every few seconds. */
+  processPendingCleanup(): Promise<{ removed: number; stillPending: number }>;
+  /** Delete entries past their retention. Run hourly. */
+  purgeExpired(): Promise<{ removed: number; pending: number }>;
+}
+
 /** spec 5.3: decides what is memory-worthy given consent settings; redacts. */
 export interface MemoryPolicy {
   evaluate(candidate: MemoryCandidate): Promise<MemoryPolicyDecision>;

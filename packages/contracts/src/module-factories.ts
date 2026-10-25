@@ -11,6 +11,7 @@ import type {
   BucketProvisioner,
   ConsentService,
   ContextBroker,
+  MemoryMaintenance,
   MemoryPolicy,
   MemoryStore,
 } from "./interfaces/p3";
@@ -59,6 +60,8 @@ export type ContextModule = {
   consent: ConsentService;
   buckets: BucketProvisioner;
   memoryPolicy: MemoryPolicy;
+  /** Optional worker jobs; the worker schedules them when present. */
+  maintenance?: MemoryMaintenance;
 };
 export type ContextModuleFactory = (
   deps: ModuleDeps & { membership: MembershipService },

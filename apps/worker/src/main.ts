@@ -8,7 +8,11 @@ if (c.config.RUNTIME_STORE === "memory") {
   );
 }
 c.worker.start();
-c.logger.info("worker started", { concurrency: c.config.WORKER_CONCURRENCY });
+c.maintenance?.start();
+c.logger.info("worker started", {
+  concurrency: c.config.WORKER_CONCURRENCY,
+  maintenance: c.maintenance ? "on" : "off",
+});
 
 const shutdown = async (signal: string) => {
   c.logger.info("worker stopping", { signal });
